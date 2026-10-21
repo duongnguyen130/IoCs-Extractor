@@ -381,3 +381,44 @@ details.block > .inner { margin-top: 10px; }
 [data-group="Master"] { --grp: var(--accent); }
 
 .results { min-width: 0; }
+
+/* ---------- paste box ---------- */
+.paste-block { margin-top: 12px; }
+.paste-block > .inner { display: grid; gap: 0; }
+.paste-input {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 8px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.paste-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.paste-input.invalid { border-color: var(--danger); }
+#paste-hint.ok { color: var(--accent-strong); }
+#paste-hint.bad { color: var(--danger); }
+.file-list .tag-pasted {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--warn); margin-right: 6px; font-family: var(--font); font-weight: 600;
+}
+
+/* ---------- collapsed Splunk search ---------- */
+details.spl-toggle > summary {
+  display: inline-flex;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  font-size: 11.5px;
+}
+details.spl-toggle > summary:hover { border-color: var(--accent); color: var(--accent-strong); }
+details.spl-toggle[open] > summary { border-color: var(--accent); }
+.spl-title { color: var(--text-faint); font-weight: 400; font-size: 11.5px; }

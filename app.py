@@ -106,17 +106,12 @@ class Handler(BaseHTTPRequestHandler):
         opts = payload.get("options") or {}
 
         result = extract_from_files(files)
-        categories, master = splunk.build(
-            result,
-            scope=str(opts.get("scope") or "index=*")[:500],
-            earliest=str(opts.get("earliest") or "-90d")[:40],
-        )
+        categories = splunk.build(result, scope=str(opts.get("scope") or "index=*")[:500])
         total = sum(len(c["items"]) for c in categories)
         return self._json(200, {
             "reports": result["reports"],
             "errors": result["errors"],
             "categories": categories,
-            "master": master,
             "total": total,
         })
 

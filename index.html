@@ -13,7 +13,7 @@
       <span class="brand-mark" aria-hidden="true">&#9673;</span>
       <div>
         <h1>CISA IOC Extractor</h1>
-        <p>STIX bundle &rarr; Excel-ready IOC lists &rarr; Splunk hunts</p>
+        <p>STIX bundle &rarr; Excel-ready IOC lists &rarr; Splunk searches</p>
       </div>
     </div>
     <div class="topbar-meta" id="topbar-meta"></div>
@@ -31,6 +31,26 @@
         <span class="dz-sub">or click to browse &middot; .json STIX 2.x, or .txt/.csv IOC lists</span>
       </label>
 
+      <details class="block paste-block" id="paste-block">
+        <summary>Or paste JSON / IOC text</summary>
+        <div class="inner">
+          <div class="field">
+            <label for="paste-name">Name (optional)</label>
+            <input id="paste-name" type="text" placeholder="e.g. AA26-293A" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="paste-input">Content</label>
+            <textarea id="paste-input" class="paste-input" rows="8" spellcheck="false"
+              placeholder='{"type": "bundle", "objects": [ ... ]}&#10;&#10;Raw STIX JSON, or plain text with IPs, hashes, URLs, CVEs'></textarea>
+            <small id="paste-hint">STIX JSON is parsed fully. Anything else is scanned with regex.</small>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-small" id="btn-paste-add" type="button" disabled>Add pasted content</button>
+            <button class="btn btn-small btn-ghost" id="btn-paste-format" type="button" disabled>Format JSON</button>
+          </div>
+        </div>
+      </details>
+
       <ul class="file-list" id="file-list"></ul>
 
       <h2 class="panel-title">2 &middot; Splunk options</h2>
@@ -38,17 +58,6 @@
         <label for="opt-scope">Search scope</label>
         <input id="opt-scope" type="text" value="index=*" spellcheck="false">
         <small>e.g. <code>(index=firewall OR index=proxy OR index=edr)</code></small>
-      </div>
-      <div class="field">
-        <label for="opt-earliest">Lookback (earliest)</label>
-        <select id="opt-earliest">
-          <option value="-24h">Last 24 hours</option>
-          <option value="-7d">Last 7 days</option>
-          <option value="-30d">Last 30 days</option>
-          <option value="-90d" selected>Last 90 days</option>
-          <option value="-180d">Last 180 days</option>
-          <option value="-1y">Last 1 year</option>
-        </select>
       </div>
 
       <div class="btn-row">
@@ -62,13 +71,13 @@
     <section class="results" id="results" aria-live="polite">
       <div class="empty-state" id="empty-state">
         <h2>No advisories loaded</h2>
-        <p>Upload one or more CISA <code>*-stix.json</code> files. Each IOC type gets its own list you can paste
-          straight into an Excel column, plus a recommended broad Splunk search.</p>
+        <p>Upload one or more CISA <code>*-stix.json</code> files, or paste the JSON (press Ctrl+V anywhere on this page). Each IOC type gets its own list you can paste
+          straight into an Excel column, plus a broad Splunk search: <code>index=* ("ioc1" OR "ioc2" ...)</code>.</p>
         <ul class="feature-list">
           <li><strong>Network:</strong> IPs, domains, URLs, emails (CDN/cloud IPs flagged)</li>
           <li><strong>Hashes:</strong> SHA-256 / SHA-1 / MD5 / SSDEEP, linked to file names</li>
           <li><strong>Host:</strong> file names, tools &amp; RMM software with process names</li>
-          <li><strong>Context:</strong> CVEs with affected products, ATT&amp;CK techniques with hunts</li>
+          <li><strong>Context:</strong> CVEs with affected products, ATT&amp;CK techniques</li>
         </ul>
       </div>
 
@@ -78,7 +87,7 @@
           <div class="summary-actions">
             <button class="btn btn-small" id="btn-copy-all">Copy all as Excel table</button>
             <button class="btn btn-small" id="btn-csv">Download CSV</button>
-            <button class="btn btn-small" id="btn-spl">Download Splunk queries</button>
+            <button class="btn btn-small" id="btn-spl">Download Splunk searches</button>
           </div>
         </div>
 
@@ -93,7 +102,6 @@
 
         <nav class="cat-nav" id="cat-nav" aria-label="Jump to category"></nav>
 
-        <div id="master-section"></div>
         <div id="categories"></div>
       </div>
     </section>

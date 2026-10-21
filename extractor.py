@@ -264,7 +264,14 @@ def _report_label(bundle_objs, filename):
     if not aa and title:
         m = AA_RE.search(title)
         aa = m.group(0).upper() if m else None
-    short = aa or (filename or "upload").rsplit(".", 1)[0][:40]
+    fname_stem = (filename or "upload").rsplit(".", 1)[0]
+    clean_title = re.sub(r"^\s*#?StopRansomware:?\s*", "", title or "", flags=re.I).strip()
+    if aa:
+        short = aa
+    elif clean_title and (not filename or re.match(r"pasted-\d+$", fname_stem)):
+        short = clean_title[:40]
+    else:
+        short = fname_stem[:40]
     full = title or filename
     if aa and full and aa not in full.upper():
         full = f"{aa} {full}"
