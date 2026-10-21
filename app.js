@@ -20,7 +20,6 @@
   const btnClear = $("#btn-clear");
   const statusEl = $("#status");
   const optScope = $("#opt-scope");
-  const optEarliest = $("#opt-earliest");
 
   function el(tag, attrs = {}, ...children) {
     const n = document.createElement(tag);
@@ -137,7 +136,8 @@
     fileList.replaceChildren(
       ...state.files.map((f, idx) =>
         el("li", {},
-          el("span", { class: "fname", title: f.name, text: f.name }),
+          el("span", { class: "fname", title: f.name },
+            f.pasted ? el("span", { class: "tag-pasted", text: "pasted" }) : null, f.name),
           el("span", { class: "fsize", text: fmtSize(f.size) }),
           el("button", {
             title: "Remove", "aria-label": `Remove ${f.name}`, text: "✕",
@@ -161,10 +161,94 @@
   btnExtract.addEventListener("click", extract);
   btnClear.addEventListener("click", () => { state.files = []; renderFileList(); clearResults(); });
 
+  // ------------------------------------------------------------------ paste JSON / text
+  const pasteBlock = $("#paste-block");
+  const pasteInput = $("#paste-input");
+  const pasteName = $("#paste-name");
+  const pasteHint = $("#paste-hint");
+  const btnPasteAdd = $("#btn-paste-add");
+  const btnPasteFormat = $("#btn-paste-format");
+  const AA_RE = /\bAA\d{2}-\d{3}[A-Z]?\b/i;
+  let pasteCount = 0;
+
+  function analyzePaste(text) {
+    const t = text.trim();
+    if (!t) return { kind: "empty" };
+    if (/^[\[{]/.test(t)) {
+      try {
+        const obj = JSON.parse(t);
+        const objs = Array.isArray(obj) ? obj : obj.objects || [obj];
+        const n = objs.filter((o) => o && o.type === "indicator").length;
+        const report = objs.find((o) => o && o.type === "report");
+        return { kind: "json", obj, indicators: n, title: report?.name || "" };
+      } catch (e) {
+        return { kind: "badjson", error: e.message };
+      }
+    }
+    return { kind: "text" };
+  }
+
+  function updatePasteHint() {
+    const a = analyzePaste(pasteInput.value);
+    pasteInput.classList.toggle("invalid", a.kind === "badjson");
+    pasteHint.className = "";
+    btnPasteAdd.disabled = a.kind === "empty";
+    btnPasteFormat.disabled = a.kind !== "json";
+    if (a.kind === "empty") pasteHint.textContent = "STIX JSON is parsed fully. Anything else is scanned with regex.";
+    else if (a.kind === "json") {
+      pasteHint.className = "ok";
+      pasteHint.textContent = `Valid JSON: ${a.indicators} indicator(s)${a.title ? " · " + a.title : ""}`;
+    } else if (a.kind === "badjson") {
+      pasteHint.className = "bad";
+      pasteHint.textContent = `Invalid JSON (${a.error}). It will be scanned as plain text if added.`;
+    } else pasteHint.textContent = "Plain text, scanned with regex for IPs, domains, URLs, hashes, CVEs.";
+    return a;
+  }
+
+  function addPasted(text, nameHint = "") {
+    const a = analyzePaste(text);
+    if (a.kind === "empty") return;
+    let base = nameHint.trim() || ((a.title || "").match(AA_RE)?.[0]) || (text.match(AA_RE)?.[0]) || `pasted-${++pasteCount}`;
+    base = base.replace(/[^\w.\- ]/g, "_").slice(0, 60);
+    const ext = a.kind === "json" ? ".json" : ".txt";
+    let name = base.toLowerCase().endsWith(ext) ? base : base + ext;
+    if (state.files.some((f) => f.content === text)) { toast("That content is already loaded"); return; }
+    while (state.files.some((f) => f.name === name)) name = `${base}-${++pasteCount}${ext}`;
+    state.files.push({ name, size: new Blob([text]).size, content: text, pasted: true });
+    renderFileList();
+    extract();
+    toast(`Added ${name}`);
+  }
+
+  pasteInput.addEventListener("input", updatePasteHint);
+  btnPasteFormat.addEventListener("click", () => {
+    const a = analyzePaste(pasteInput.value);
+    if (a.kind === "json") { pasteInput.value = JSON.stringify(a.obj, null, 2); updatePasteHint(); }
+  });
+  btnPasteAdd.addEventListener("click", () => {
+    addPasted(pasteInput.value, pasteName.value);
+    pasteInput.value = "";
+    pasteName.value = "";
+    updatePasteHint();
+  });
+  pasteInput.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !btnPasteAdd.disabled) btnPasteAdd.click();
+  });
+
+  // Ctrl+V anywhere on the page (outside a text field) adds the clipboard directly
+  document.addEventListener("paste", (e) => {
+    const tgt = e.target;
+    if (tgt instanceof HTMLElement && (tgt.closest("input, textarea, select") || tgt.isContentEditable)) return;
+    const text = e.clipboardData?.getData("text") || "";
+    if (!text.trim()) return;
+    e.preventDefault();
+    pasteBlock.open = true;
+    addPasted(text);
+  });
+
   let optTimer;
   const onOptChange = () => { clearTimeout(optTimer); optTimer = setTimeout(() => state.files.length && extract(), 350); };
   optScope.addEventListener("input", onOptChange);
-  optEarliest.addEventListener("change", onOptChange);
 
   // ------------------------------------------------------------------ API
   async function extract() {
@@ -177,7 +261,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           files: state.files.map(({ name, content }) => ({ name, content })),
-          options: { scope: optScope.value.trim() || "index=*", earliest: optEarliest.value },
+          options: { scope: optScope.value.trim() || "index=*" },
         }),
       });
       const data = await res.json();
@@ -201,76 +285,16 @@
   }
 
   // ------------------------------------------------------------------ rendering helpers
-  const SPL_CMDS = /^(\|\s*)(\w+)(.*)$/;
-  function splPre(spl) {
-    const pre = el("pre");
-    spl.split("\n").forEach((line, i) => {
-      if (i) pre.append("\n");
-      const m = line.match(SPL_CMDS);
-      if (m) {
-        pre.append(el("span", { class: "pipe", text: m[1] }), el("span", { class: "kw", text: m[2] }), m[3]);
-      } else {
-        pre.append(line);
-      }
-    });
-    return pre;
-  }
-
-  function splBlock(q, recommended) {
-    const btn = el("button", { class: "btn btn-xs", text: "Copy SPL" });
-    btn.addEventListener("click", () => copyText(q.spl, btn));
-    return el("div", { class: "spl" },
-      el("div", { class: "spl-head" },
-        el("span", { class: "spl-title" }, recommended ? el("span", { class: "rec", text: "Recommended" }) : null, q.title),
-        btn
-      ),
-      splPre(q.spl),
-      q.note ? el("p", { class: "spl-note", text: q.note }) : null
-    );
-  }
-
-  function splSection(queries) {
-    if (!queries || !queries.length) return null;
-    const [first, ...rest] = queries;
-    return el("div", { class: "spl-section" },
-      el("h4", { text: "Splunk: recommended broad search" }),
-      splBlock(first, true),
-      rest.length
-        ? el("details", { class: "block" },
-            el("summary", { text: `${rest.length} alternative search${rest.length > 1 ? "es" : ""} (CIM / accelerated)` }),
-            el("div", { class: "inner" }, rest.map((q) => splBlock(q, false))))
-        : null
-    );
-  }
-
-  function contextTags(item) {
-    return (item.context || []).map((c) => {
-      let cls = "tag";
-      if (/shared infrastructure|private/i.test(c)) cls += " warn";
-      else if (/ransom|lockbit/i.test(c)) cls += " danger";
-      return el("span", { class: cls, text: c });
-    });
-  }
-
-  function detailsTable(cat) {
-    const isCve = cat.key === "cve";
-    const head = ["Value", "Context", isCve ? "Links" : "Related", "Source"];
-    const rows = cat.items.map((i) =>
-      el("tr", {},
-        el("td", { class: "mono", text: i.value }),
-        el("td", {}, contextTags(i).length ? contextTags(i) : el("span", { class: "muted", text: "—" })),
-        isCve
-          ? el("td", { class: "links" },
-              i.extra?.nvd ? el("a", { href: i.extra.nvd, target: "_blank", rel: "noopener noreferrer", text: "NVD" }) : null,
-              i.extra?.kev ? el("a", { href: i.extra.kev, target: "_blank", rel: "noopener noreferrer", text: "CISA KEV" }) : null)
-          : el("td", { class: "mono muted", text: (i.related || []).join(", ") || "—" }),
-        el("td", {}, (i.sources || []).map((s) => el("span", { class: "tag ok", text: s })))
-      )
-    );
-    return el("div", { class: "table-wrap" },
-      el("table", { class: "data-table" },
-        el("thead", {}, el("tr", {}, head.map((h) => el("th", { text: h })))),
-        el("tbody", {}, rows)));
+  function splSection(spl) {
+    if (!spl) return null;
+    const btn = el("button", { class: "btn btn-xs", type: "button", text: "Copy SPL" });
+    btn.addEventListener("click", () => copyText(spl, btn));
+    return el("details", { class: "block spl-toggle" },
+      el("summary", { text: "Splunk: recommended broad search" }),
+      el("div", { class: "inner" },
+        el("div", { class: "spl" },
+          el("div", { class: "spl-head" }, el("span", { class: "spl-title", text: `${spl.length.toLocaleString()} characters` }), btn),
+          el("pre", { text: spl }))));
   }
 
   function itemsToTSV(cat, withHeader = true) {
@@ -279,22 +303,13 @@
     return (withHeader ? ["Category\tValue\tContext\tRelated\tSource"] : []).concat(lines).join("\n");
   }
 
-  function cardShell(cat, extraActions = []) {
+  function card(cat) {
     const listText = cat.items.map((i) => i.value).join("\n");
-    const btnList = el("button", { class: "btn btn-small", text: "Copy list" });
+    const btnList = el("button", { class: "btn btn-small", type: "button", text: "Copy list" });
     btnList.addEventListener("click", () => copyText(listText, btnList));
-    const btnTable = el("button", { class: "btn btn-small", text: "Copy with context" });
+    const btnTable = el("button", { class: "btn btn-small", type: "button", text: "Copy with context" });
     btnTable.addEventListener("click", () => copyText(itemsToTSV(cat), btnTable));
-    return {
-      listText,
-      head: el("div", { class: "card-head" },
-        el("h3", { class: "card-title" }, cat.label, el("span", { class: "badge", text: cat.items.length })),
-        el("div", { class: "card-actions" }, btnList, btnTable, extraActions)),
-    };
-  }
 
-  function standardCard(cat) {
-    const { listText, head } = cardShell(cat);
     const ta = el("textarea", {
       class: "ioc-list", readonly: true, spellcheck: "false",
       rows: Math.min(Math.max(cat.items.length, 3), 12),
@@ -304,66 +319,13 @@
     ta.addEventListener("focus", () => ta.select());
 
     return el("article", { class: "card", id: `cat-${cat.key}`, dataset: { group: cat.group } },
-      head,
+      el("div", { class: "card-head" },
+        el("h3", { class: "card-title" }, cat.label, el("span", { class: "badge", text: cat.items.length })),
+        el("div", { class: "card-actions" }, btnList, btnTable)),
       el("div", { class: "card-body" },
         cat.note ? el("div", { class: "card-note", text: cat.note }) : null,
         ta,
-        el("details", { class: "block" },
-          el("summary", { text: "Details: context, related hashes/files, source advisory" }),
-          el("div", { class: "inner" }, detailsTable(cat))),
-        splSection(cat.splunk)
-      )
-    );
-  }
-
-  function techniqueCard(cat) {
-    const { listText, head } = cardShell(cat);
-    const withHunt = cat.items.filter((i) => i.extra?.hunts?.length);
-    let onlyHunts = true;
-
-    const tbody = el("tbody");
-    const draw = () => {
-      const items = onlyHunts ? withHunt : cat.items;
-      tbody.replaceChildren(...items.flatMap((i) => {
-        const tid = i.value;
-        const url = i.extra?.url;
-        const hunts = i.extra?.hunts || [];
-        const row = el("tr", { class: "tech-row" },
-          el("td", {}, url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: tid }) : tid),
-          el("td", {}, (i.context || []).join(" / ")),
-          el("td", {}, (i.sources || []).map((s) => el("span", { class: "tag ok", text: s }))),
-          el("td", {}, hunts.length ? el("span", { class: "tag ok", text: `${hunts.length} hunt${hunts.length > 1 ? "s" : ""}` })
-                                    : el("span", { class: "tech-pointer", text: i.extra?.pointer || "" }))
-        );
-        if (!hunts.length) return [row];
-        const huntRow = el("tr", {},
-          el("td", { colspan: "4", class: "tech-hunts" },
-            el("details", { class: "block" },
-              el("summary", { text: `Splunk hunt for ${tid}` }),
-              el("div", { class: "inner" }, hunts.map((q, n) => splBlock(q, n === 0))))));
-        return [row, huntRow];
-      }));
-    };
-
-    const toggle = el("input", { type: "checkbox", checked: true });
-    toggle.addEventListener("change", () => { onlyHunts = toggle.checked; draw(); });
-    draw();
-
-    const ta = el("textarea", { class: "ioc-list", readonly: true, rows: 4, "aria-label": "Technique IDs" });
-    ta.value = listText;
-
-    return el("article", { class: "card", id: `cat-${cat.key}`, dataset: { group: cat.group } },
-      head,
-      el("div", { class: "card-body" },
-        el("div", { class: "tech-toolbar" },
-          el("label", {}, toggle, `Only show techniques with a Splunk hunt (${withHunt.length} of ${cat.items.length})`)),
-        el("div", { class: "table-wrap" },
-          el("table", { class: "data-table" },
-            el("thead", {}, el("tr", {}, ["Technique", "Tactic / Name", "Source", "Hunt"].map((h) => el("th", { text: h })))),
-            tbody)),
-        el("details", { class: "block" }, el("summary", { text: "Plain list of technique IDs" }), el("div", { class: "inner" }, ta))
-      )
-    );
+        splSection(cat.spl)));
   }
 
   // ------------------------------------------------------------------ main render
@@ -372,14 +334,12 @@
     $("#results-body").hidden = false;
     $("#topbar-meta").textContent = `${data.reports.length} advisory file(s) · ${data.total} items`;
 
-    // summary stats (by group)
     const groups = {};
     data.categories.forEach((c) => { groups[c.group] = (groups[c.group] || 0) + c.items.length; });
     $("#summary-stats").replaceChildren(
       ...Object.entries(groups).map(([g, n]) => el("div", { class: "stat", dataset: { group: g } }, el("b", { text: n }), el("span", { text: g })))
     );
 
-    // reports
     $("#reports-table tbody").replaceChildren(
       ...data.reports.map((r) =>
         el("tr", {},
@@ -391,24 +351,12 @@
     );
     $("#error-list").replaceChildren(...(data.errors || []).map((e) => el("li", { text: e })));
 
-    // nav
     $("#cat-nav").replaceChildren(
       ...data.categories.map((c) =>
         el("a", { href: `#cat-${c.key}`, dataset: { group: c.group } },
           el("span", { class: "dot" }), c.label, el("span", { class: "n", text: c.items.length })))
     );
 
-    // master sweep
-    const master = $("#master-section");
-    master.replaceChildren();
-    if (data.master && data.master.length) {
-      master.append(
-        el("article", { class: "card", dataset: { group: "Master" } },
-          el("div", { class: "card-head" }, el("h3", { class: "card-title", text: "Master sweep: start here" })),
-          el("div", { class: "card-body" }, data.master.map((q, i) => splBlock(q, i === 0)))));
-    }
-
-    // categories grouped
     const wrap = $("#categories");
     wrap.replaceChildren();
     let lastGroup = null;
@@ -417,7 +365,7 @@
         wrap.append(el("div", { class: "group-heading", dataset: { group: c.group }, text: c.group }));
         lastGroup = c.group;
       }
-      wrap.append(c.key === "technique" ? techniqueCard(c) : standardCard(c));
+      wrap.append(card(c));
     });
   }
 
@@ -441,21 +389,10 @@
   $("#btn-spl").addEventListener("click", () => {
     if (!state.result) return;
     const out = [];
-    const sep = "=".repeat(78);
-    const seen = new Set();
-    const emit = (heading, q) => {
-      if (seen.has(q.spl)) return;
-      seen.add(q.spl);
-      out.push(sep, `${heading} :: ${q.title}`, q.note ? `NOTE: ${q.note}` : null, sep, q.spl, "");
-    };
-    (state.result.master || []).forEach((q) => emit("MASTER", q));
     state.result.categories.forEach((c) => {
-      (c.splunk || []).forEach((q) => emit(c.label.toUpperCase(), q));
-      if (c.key === "technique") {
-        c.items.forEach((i) => (i.extra?.hunts || []).forEach((q) => emit(`ATT&CK ${i.value}`, q)));
-      }
+      if (c.spl) out.push(`### ${c.label}`, c.spl, "");
     });
     const stamp = new Date().toISOString().slice(0, 10);
-    download(`splunk_hunts_${stamp}.spl.txt`, out.filter((l) => l !== null).join("\n"));
+    download(`splunk_searches_${stamp}.txt`, out.join("\n"));
   });
 })();
