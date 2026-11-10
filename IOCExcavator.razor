@@ -172,6 +172,10 @@
 
                 <div class="ix-right">
                     <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            @onclick="ToggleAllCollapsed">
+                        @(AllCollapsed ? "Expand all" : "Collapse all")
+                    </button>
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
                             @onclick="CopyAllAsync">
                         @(copiedKey == "__all" ? "Copied" : "Copy table")
                     </button>
@@ -188,9 +192,14 @@
             {
                 <article class="ix-cat ix-combined">
                     <div class="ix-cat-head">
-                        <span class="ix-label">Combined search</span>
-                        <span class="ix-badge">@combineKeys.Count</span>
-                        <span class="ix-group-tag">categories</span>
+                        <button type="button" class="ix-cat-toggle"
+                                aria-expanded="@Pressed(!IsCollapsed(CombinedKey))"
+                                @onclick="() => ToggleCollapse(CombinedKey)">
+                            <span class="ix-chev" aria-hidden="true"></span>
+                            <span class="ix-label">Combined search</span>
+                            <span class="ix-badge">@combineKeys.Count</span>
+                            <span class="ix-group-tag">categories</span>
+                        </button>
 
                         <div class="ix-right">
                             <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
@@ -198,45 +207,48 @@
                         </div>
                     </div>
 
-                    <div class="ix-cat-body">
-                        <div class="ix-chips">
-                            @foreach (IocCategory s in CombineSelection())
+                    @if (!IsCollapsed(CombinedKey))
+                    {
+                        <div class="ix-cat-body">
+                            <div class="ix-chips">
+                                @foreach (IocCategory s in CombineSelection())
+                                {
+                                    <span class="ix-chip @GroupClass(s.Group)">@s.Label</span>
+                                }
+                            </div>
+
+                            @if (combinedSearches.Count == 0)
                             {
-                                <span class="ix-chip @GroupClass(s.Group)">@s.Label</span>
+                                <div class="ix-cat-note">
+                                    Tick Combine on at least two categories to search them together.
+                                </div>
+                            }
+
+                            @for (int ci = 0; ci < combinedSearches.Count; ci++)
+                            {
+                                BuiltSearch search = combinedSearches[ci];
+                                string searchKey = "combined:" + ci;
+
+                                <details class="ix-spl">
+                                    <summary>
+                                        @search.Name
+                                        <span class="ix-spl-count">@search.Terms terms</span>
+                                    </summary>
+                                    <div class="ix-spl-inner">
+                                        @if (search.Note is not null)
+                                        {
+                                            <p class="ix-spl-note">@search.Note</p>
+                                        }
+                                        <pre>@search.Spl</pre>
+                                        <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                                @onclick="() => CopySearchAsync(search, searchKey)">
+                                            @(copiedKey == searchKey ? "Copied" : "Copy SPL")
+                                        </button>
+                                    </div>
+                                </details>
                             }
                         </div>
-
-                        @if (combinedSearches.Count == 0)
-                        {
-                            <div class="ix-cat-note">
-                                Tick Combine on at least two categories to search them together.
-                            </div>
-                        }
-
-                        @for (int ci = 0; ci < combinedSearches.Count; ci++)
-                        {
-                            BuiltSearch search = combinedSearches[ci];
-                            string searchKey = "combined:" + ci;
-
-                            <details class="ix-spl">
-                                <summary>
-                                    @search.Name
-                                    <span class="ix-spl-count">@search.Terms terms</span>
-                                </summary>
-                                <div class="ix-spl-inner">
-                                    @if (search.Note is not null)
-                                    {
-                                        <p class="ix-spl-note">@search.Note</p>
-                                    }
-                                    <pre>@search.Spl</pre>
-                                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
-                                            @onclick="() => CopySearchAsync(search, searchKey)">
-                                        @(copiedKey == searchKey ? "Copied" : "Copy SPL")
-                                    </button>
-                                </div>
-                            </details>
-                        }
-                    </div>
+                    }
                 </article>
             }
 
@@ -246,9 +258,15 @@
 
                 <article class="ix-cat @GroupClass(cat.Group)">
                     <div class="ix-cat-head">
-                        <span class="ix-label">@cat.Label</span>
-                        <span class="ix-badge">@cat.Items.Count</span>
-                        <span class="ix-group-tag">@cat.Group</span>
+                        <button type="button" class="ix-cat-toggle"
+                                aria-expanded="@Pressed(!IsCollapsed(cat.Key))"
+                                title="@CollapseHint(cat.Label)"
+                                @onclick="() => ToggleCollapse(cat.Key)">
+                            <span class="ix-chev" aria-hidden="true"></span>
+                            <span class="ix-label">@cat.Label</span>
+                            <span class="ix-badge">@cat.Items.Count</span>
+                            <span class="ix-group-tag">@cat.Group</span>
+                        </button>
 
                         <div class="ix-right">
                             @if (cat.Searchable)
@@ -270,75 +288,78 @@
                         </div>
                     </div>
 
-                    <div class="ix-cat-body">
-                        @if (cat.Note is not null)
-                        {
-                            <div class="ix-cat-note">@cat.Note</div>
-                        }
-
-                        <div class="ix-items">
-                            @foreach (IocItem i in cat.Items.Take(MaxRowsShown))
+                    @if (!IsCollapsed(cat.Key))
+                    {
+                        <div class="ix-cat-body">
+                            @if (cat.Note is not null)
                             {
-                                IocItem row = i;
-                                <div class="ix-item">
-                                    <button type="button"
-                                            class="@ValueClass(row)"
-                                            title="Click to copy this value"
-                                            @onclick="() => CopyValueAsync(row.Value, cat.Key)">@row.Value</button>
+                                <div class="ix-cat-note">@cat.Note</div>
+                            }
 
-                                    @if (row.Related.Count > 0)
-                                    {
-                                        <span class="ix-rel">&rarr; @string.Join(", ", row.Related)</span>
-                                    }
-                                    @foreach (string s in row.Sources)
-                                    {
-                                        <span class="ix-src">@s</span>
-                                    }
-                                    @if (row.Nvd is not null)
-                                    {
-                                        <a class="ix-link" href="@row.Nvd" target="_blank" rel="noopener noreferrer">NVD</a>
-                                        <a class="ix-link" href="@row.Kev" target="_blank" rel="noopener noreferrer">KEV</a>
-                                    }
-                                    @if (row.Mitre is not null)
-                                    {
-                                        <a class="ix-link" href="@row.Mitre" target="_blank" rel="noopener noreferrer">ATT&amp;CK</a>
-                                    }
+                            <div class="ix-items">
+                                @foreach (IocItem i in cat.Items.Take(MaxRowsShown))
+                                {
+                                    IocItem row = i;
+                                    <div class="ix-item">
+                                        <button type="button"
+                                                class="@ValueClass(row)"
+                                                title="Click to copy this value"
+                                                @onclick="() => CopyValueAsync(row.Value, cat.Key)">@row.Value</button>
+
+                                        @if (row.Related.Count > 0)
+                                        {
+                                            <span class="ix-rel">&rarr; @string.Join(", ", row.Related)</span>
+                                        }
+                                        @foreach (string s in row.Sources)
+                                        {
+                                            <span class="ix-src">@s</span>
+                                        }
+                                        @if (row.Nvd is not null)
+                                        {
+                                            <a class="ix-link" href="@row.Nvd" target="_blank" rel="noopener noreferrer">NVD</a>
+                                            <a class="ix-link" href="@row.Kev" target="_blank" rel="noopener noreferrer">KEV</a>
+                                        }
+                                        @if (row.Mitre is not null)
+                                        {
+                                            <a class="ix-link" href="@row.Mitre" target="_blank" rel="noopener noreferrer">ATT&amp;CK</a>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            @if (cat.Items.Count > MaxRowsShown)
+                            {
+                                <div class="ix-cat-note">
+                                    Showing the first @MaxRowsShown of @cat.Items.Count.
+                                    Copy and export include all of them.
                                 </div>
                             }
+
+                            @for (int si = 0; si < cat.Searches.Count; si++)
+                            {
+                                BuiltSearch search = cat.Searches[si];
+                                string searchKey = cat.Key + ":spl:" + si;
+
+                                <details class="ix-spl">
+                                    <summary>
+                                        @search.Name
+                                        <span class="ix-spl-count">@search.Terms terms</span>
+                                    </summary>
+                                    <div class="ix-spl-inner">
+                                        @if (search.Note is not null)
+                                        {
+                                            <p class="ix-spl-note">@search.Note</p>
+                                        }
+                                        <pre>@search.Spl</pre>
+                                        <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                                @onclick="() => CopySearchAsync(search, searchKey)">
+                                            @(copiedKey == searchKey ? "Copied" : "Copy SPL")
+                                        </button>
+                                    </div>
+                                </details>
+                            }
                         </div>
-
-                        @if (cat.Items.Count > MaxRowsShown)
-                        {
-                            <div class="ix-cat-note">
-                                Showing the first @MaxRowsShown of @cat.Items.Count.
-                                Copy and export include all of them.
-                            </div>
-                        }
-
-                        @for (int si = 0; si < cat.Searches.Count; si++)
-                        {
-                            BuiltSearch search = cat.Searches[si];
-                            string searchKey = cat.Key + ":spl:" + si;
-
-                            <details class="ix-spl">
-                                <summary>
-                                    @search.Name
-                                    <span class="ix-spl-count">@search.Terms terms</span>
-                                </summary>
-                                <div class="ix-spl-inner">
-                                    @if (search.Note is not null)
-                                    {
-                                        <p class="ix-spl-note">@search.Note</p>
-                                    }
-                                    <pre>@search.Spl</pre>
-                                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
-                                            @onclick="() => CopySearchAsync(search, searchKey)">
-                                        @(copiedKey == searchKey ? "Copied" : "Copy SPL")
-                                    </button>
-                                </div>
-                            </details>
-                        }
-                    </div>
+                    }
                 </article>
             }
 
@@ -407,6 +428,9 @@
 
     private readonly List<BuiltSearch> combinedSearches = new();
 
+    /// <summary>Cards the analyst has minimised, by category key.</summary>
+    private readonly HashSet<string> collapsedKeys = new(StringComparer.Ordinal);
+
     /// <summary>The scope the last run used, so combined and per-category searches agree.</summary>
     private string resolvedScope = "index=*";
 
@@ -456,6 +480,34 @@
     };
 
     private static string SegClass(string group) => "ix-seg-dot " + GroupClass(group);
+
+    /// <summary>Stands in for a category key, so the combined panel minimises like any card.</summary>
+    private const string CombinedKey = "__combined";
+
+    private bool IsCollapsed(string key) => collapsedKeys.Contains(key);
+
+    private void ToggleCollapse(string key)
+    {
+        if (!collapsedKeys.Remove(key)) { collapsedKeys.Add(key); }
+    }
+
+    /// <summary>True only when every card on screen is minimised, which flips the toolbar button.</summary>
+    private bool AllCollapsed =>
+        categories.Count > 0 && categories.All(c => collapsedKeys.Contains(c.Key));
+
+    private void ToggleAllCollapsed()
+    {
+        if (AllCollapsed)
+        {
+            collapsedKeys.Clear();
+            return;
+        }
+
+        foreach (IocCategory c in categories) { collapsedKeys.Add(c.Key); }
+        collapsedKeys.Add(CombinedKey);
+    }
+
+    private static string CollapseHint(string label) => "Minimise " + label;
 
     private IEnumerable<(string Group, int Count)> GroupTotals() =>
         categories
@@ -708,6 +760,7 @@
         copiedKey = null;
         combineKeys.Clear();
         combinedSearches.Clear();
+        collapsedKeys.Clear();
 
         try
         {
@@ -1008,6 +1061,7 @@
         hasExtracted = false;
         combineKeys.Clear();
         combinedSearches.Clear();
+        collapsedKeys.Clear();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
