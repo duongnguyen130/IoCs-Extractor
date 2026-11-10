@@ -1,25 +1,8 @@
-/* IOC Excavator styles.
+/* IOC Excavator styles. Red flags an indicator that will also hit benign
+   traffic, amber one named but unverified, yellow a copy confirmation.
+   Group accents are marks only: a rail and a dot, never the heading text. */
 
-   Scoped to this component by Blazor. Classes are also ix- prefixed and
-   nested under .ioc-excavator so the file still behaves if it is ever served
-   as a plain stylesheet.
-
-   Same token set and section order as the SSN Scanner, so the two pages read
-   as one product.
-
-   Colour is meaningful, not decorative:
-     red     an indicator that will also hit benign traffic and needs scoping
-     amber   an entry named in the advisory but not verified
-     yellow  a copied confirmation, or the loaded file name
-     accents one hue per IOC group, so a section is recognised before it is read
-
-   The group accents are marks only - a rail and a dot. Headings keep the normal
-   ink colour, because a hue picked to be told apart from five other hues is not
-   also guaranteed to be readable as text. Every accent appears beside the group
-   name in words, so the colour is never the only thing carrying the meaning.
-*/
-
-/* Theme tokens. Override these from your own stylesheet to
+/* Theme tokens. Override from your own stylesheet to
    inherit the site palette. */
 
 .ioc-excavator {
@@ -41,9 +24,8 @@
     --ix-mark: #FDE68A;
     --ix-mark-text: #3F2D00;
 
-    /* Group accents, in display order. The order is the colourblind-safety
-       mechanism, not a preference: adjacent pairs were checked for protan,
-       deutan and tritan separation, so moving one means re-checking. */
+    /* Group accents. The order is the colourblind-safety mechanism: adjacent
+       pairs were checked, so moving one means re-checking the separation. */
     --ix-g-1: #2A78D6;
     --ix-g-2: #EB6834;
     --ix-g-3: #1BAF7A;
@@ -92,7 +74,6 @@
         --ix-mark-text: #FBD24E;
         --ix-shadow: 0 1px 2px rgba(0, 0, 0, .4);
 
-        /* Same six hues, stepped for the dark surface rather than flipped. */
         --ix-g-1: #3987E5;
         --ix-g-2: #D95926;
         --ix-g-3: #199E70;
@@ -604,13 +585,11 @@
     padding: 11px 16px;
     border-bottom: 1px solid var(--ix-line-soft);
 
-    /* Plain first, then the tinted version: a browser without color-mix keeps
-       the flat header rather than losing the background altogether. */
+    /* Plain first: a browser without color-mix keeps the flat header. */
     background: var(--ix-surface-2);
     background: color-mix(in srgb, var(--ix-accent, transparent) 7%, var(--ix-surface-2));
 
-    /* The accent rail. An inset shadow rather than a border, so it sits inside
-       the card's rounded corner and does not shift the header's height. */
+    /* Inset shadow, not a border: it sits inside the rounded corner. */
     box-shadow: inset 3px 0 0 var(--ix-accent, var(--ix-line));
 }
 
@@ -703,7 +682,7 @@
     border-bottom-color: var(--ix-text-2);
 }
 
-/* The indicator value. Click copies it. Red marks one that will also hit
+/* The indicator value; click copies it. Red marks one that will also hit
    benign traffic, so a red row always means "scope this before hunting". */
 
 .ioc-excavator .ix-value {

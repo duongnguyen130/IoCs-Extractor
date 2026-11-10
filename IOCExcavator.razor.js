@@ -1,22 +1,12 @@
-// IOC Excavator - collocated JS module.
+// IOC Excavator - collocated JS module. Only the clipboard and handing over a
+// file need the browser; everything else happens in C# on the server.
 //
-// Loaded by IOCExcavator.razor in OnAfterRenderAsync from
-// ./Components/Pages/IOCExcavator/IOCExcavator.razor.js
-//
-// Deliberately tiny. Only two things genuinely need the browser: the
-// clipboard, and handing a generated file to the user. All parsing, scoring
-// and Splunk building happens in C# on the server, so a crafted advisory
-// never becomes JavaScript data.
-//
-// Line comments and plain ASCII throughout: Visual Studio's JavaScript
-// language service reports TS1206 / TS1146 on block comments in a .razor.js
-// file, and those warnings are pure noise in the Error List.
+// Line comments and plain ASCII throughout: Visual Studio's JavaScript language
+// service reports TS1206 / TS1146 on block comments in a .razor.js file.
 
 // Copies text to the clipboard. Returns true when the copy appeared to work.
-//
-// navigator.clipboard needs a secure context. Plain http://localhost counts as
-// one, but an intranet http:// origin does not, so the textarea fallback is
-// load-bearing rather than legacy-browser politeness.
+// The textarea fallback is load-bearing, not legacy politeness: navigator
+// .clipboard needs a secure context, and an intranet http:// origin is not one.
 export async function copyText(text) {
     if (navigator.clipboard && window.isSecureContext) {
         try {
@@ -40,16 +30,13 @@ export async function copyText(text) {
     } catch {
         return false;
     } finally {
-        // clear the element's own copy before it leaves the DOM
         scratch.value = "";
         document.body.removeChild(scratch);
     }
 }
 
-// Hands the browser a file built on the server.
-//
-// The object URL is revoked right after the click, so the blob is not left
-// reachable from the page.
+// Hands the browser a file built on the server. The object URL is revoked
+// after the click, so the blob is not left reachable from the page.
 export function downloadText(filename, mimeType, content) {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
