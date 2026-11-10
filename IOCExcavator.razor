@@ -418,7 +418,7 @@
                 int n = CountIndicators(doc.RootElement);
                 return $"Valid JSON, {n} indicator{(n == 1 ? "" : "s")}.";
             }
-            catch (JsonException ex)
+            catch (System.Text.Json.JsonException ex)
             {
                 return $"Invalid JSON ({ex.Message}). It will be swept as plain text.";
             }
@@ -437,7 +437,7 @@
             using JsonDocument doc = JsonDocument.Parse(t, JsonOptions);
             return "ix-ok";
         }
-        catch (JsonException)
+        catch (System.Text.Json.JsonException)
         {
             return "ix-bad";
         }
@@ -641,7 +641,7 @@
                 using JsonDocument doc = JsonDocument.Parse(text, JsonOptions);
                 return ParseStix(doc.RootElement, file.Name, store);
             }
-            catch (JsonException)
+            catch (System.Text.Json.JsonException)
             {
                 // malformed JSON is still worth sweeping; say so in the report row
             }
@@ -672,7 +672,7 @@
         try
         {
             return new UTF8Encoding(false, throwOnInvalidBytes: true)
-                .GetString(data).TrimStart('﻿');
+                .GetString(data).TrimStart('\uFEFF');
         }
         catch (DecoderFallbackException)
         {
@@ -803,7 +803,7 @@
         else
         {
             // UTF-8 BOM so Excel opens non-ASCII values correctly
-            sb.Append('﻿');
+            sb.Append('\uFEFF');
             sb.Append("Category,Value,Context,Related,Source\r\n");
 
             foreach (IocCategory c in categories)
@@ -2030,7 +2030,7 @@
         if (o.TryGetProperty("hashes", out JsonElement hashes)
             && hashes.ValueKind == JsonValueKind.Object)
         {
-            foreach (JsonProperty h in hashes.EnumerateObject())
+            foreach (System.Text.Json.JsonProperty h in hashes.EnumerateObject())
             {
                 if (h.Value.ValueKind != JsonValueKind.String) { continue; }
 
