@@ -1,0 +1,801 @@
+/* IOC Excavator styles.
+
+   Scoped to this component by Blazor. Classes are also ix- prefixed and
+   nested under .ioc-excavator so the file still behaves if it is ever served
+   as a plain stylesheet.
+
+   Same token set and section order as the SSN Scanner, so the two pages read
+   as one product.
+
+   Colour is meaningful, not decorative:
+     red    an indicator that will also hit benign traffic and needs scoping
+     amber  an entry named in the advisory but not verified
+     yellow a copied confirmation, or the loaded file name
+*/
+
+/* Theme tokens. Override these from your own stylesheet to
+   inherit the site palette. */
+
+.ioc-excavator {
+    --ix-surface: #FFFFFF;
+    --ix-surface-2: #F8FAFB;
+    --ix-line: #E3E7EC;
+    --ix-line-soft: #EDF0F3;
+    --ix-text: #0F172A;
+    --ix-text-2: #5B6675;
+    --ix-text-3: #8A94A3;
+
+    --ix-red: #C7261B;
+    --ix-red-deep: #8E1810;
+    --ix-red-muted: #B4675F;
+    --ix-red-soft: #FDECEA;
+    --ix-amber: #B45309;
+    --ix-amber-soft: #FDF3E4;
+    --ix-slate-soft: #EEF1F5;
+    --ix-mark: #FDE68A;
+    --ix-mark-text: #3F2D00;
+
+    --ix-radius: 14px;
+    --ix-radius-sm: 9px;
+    --ix-shadow: 0 1px 2px rgba(15, 23, 42, .05),
+                 0 8px 24px -16px rgba(15, 23, 42, .28);
+
+    --ix-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+               "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+    --ix-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SF Mono",
+               Consolas, "DejaVu Sans Mono", monospace;
+
+    font-family: var(--ix-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--ix-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Dark theme tokens. */
+
+@media (prefers-color-scheme: dark) {
+    .ioc-excavator {
+        --ix-surface: #161B21;
+        --ix-surface-2: #1B2128;
+        --ix-line: #262E37;
+        --ix-line-soft: #1F262E;
+        --ix-text: #E8ECF1;
+        --ix-text-2: #A0AAB8;
+        --ix-text-3: #6F7B8A;
+
+        --ix-red: #E04A3C;
+        --ix-red-deep: #B02B1E;
+        --ix-red-muted: #8E4B43;
+        --ix-red-soft: #2A1614;
+        --ix-amber: #E0A244;
+        --ix-amber-soft: #241C10;
+        --ix-slate-soft: #212932;
+        --ix-mark: #4A3A10;
+        --ix-mark-text: #FBD24E;
+        --ix-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+}
+
+.ioc-excavator *,
+.ioc-excavator *::before,
+.ioc-excavator *::after {
+    box-sizing: border-box;
+}
+
+/* Panels. */
+
+.ioc-excavator .ix-card {
+    background: var(--ix-surface);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius);
+    box-shadow: var(--ix-shadow);
+}
+
+.ioc-excavator .ix-intake {
+    padding: 26px;
+}
+
+.ioc-excavator .ix-card-head h2 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-sub {
+    margin: 6px 0 20px;
+    color: var(--ix-text-2);
+    font-size: 14px;
+    max-width: 62ch;
+}
+
+.ioc-excavator code {
+    font-family: var(--ix-mono);
+    font-size: .92em;
+    background: var(--ix-slate-soft);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+/* File picker and paste box. */
+
+.ioc-excavator .ix-dropzone {
+    position: relative;
+    border: 1.5px dashed var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    background: var(--ix-surface-2);
+    padding: 30px 20px;
+    text-align: center;
+    transition: border-color .14s ease, background .14s ease;
+}
+
+.ioc-excavator .ix-dropzone:hover,
+.ioc-excavator .ix-dropzone:focus-within {
+    border-color: var(--ix-text-3);
+}
+
+.ioc-excavator .ix-dropzone-inner {
+    pointer-events: none;
+}
+
+.ioc-excavator .ix-dropzone-icon {
+    width: 34px;
+    height: 34px;
+    margin: 0 auto 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--ix-text-3);
+    position: relative;
+}
+
+.ioc-excavator .ix-dropzone-icon::before,
+.ioc-excavator .ix-dropzone-icon::after {
+    content: "";
+    position: absolute;
+    background: var(--ix-text-3);
+    border-radius: 2px;
+}
+
+.ioc-excavator .ix-dropzone-icon::before {
+    left: 7px;
+    right: 7px;
+    top: 10px;
+    height: 1.5px;
+}
+
+.ioc-excavator .ix-dropzone-icon::after {
+    left: 7px;
+    right: 13px;
+    top: 17px;
+    height: 1.5px;
+}
+
+.ioc-excavator .ix-dropzone-title {
+    margin: 0;
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.ioc-excavator .ix-dropzone-sub {
+    margin: 4px 0 0;
+    color: var(--ix-text-2);
+    font-size: 13.5px;
+}
+
+.ioc-excavator .ix-dropzone ::deep .ix-fileinput {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+/* Queued files. */
+
+.ioc-excavator .ix-filelist {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ioc-excavator .ix-filelist li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border: 1px solid var(--ix-line-soft);
+    border-radius: var(--ix-radius-sm);
+    background: var(--ix-surface-2);
+    font-size: 13px;
+}
+
+.ioc-excavator .ix-fname {
+    font-family: var(--ix-mono);
+    font-weight: 700;
+    background: var(--ix-mark);
+    color: var(--ix-mark-text);
+    border-radius: 3px;
+    padding: 2px 7px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ioc-excavator .ix-tag {
+    font-family: var(--ix-sans);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    opacity: .7;
+    margin-right: 6px;
+}
+
+.ioc-excavator .ix-fsize {
+    font-family: var(--ix-mono);
+    font-size: 12px;
+    color: var(--ix-text-3);
+}
+
+.ioc-excavator .ix-remove {
+    margin-left: auto;
+    font: inherit;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--ix-text-3);
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    padding: 2px 7px;
+    cursor: pointer;
+}
+
+.ioc-excavator .ix-remove:hover {
+    color: var(--ix-red);
+    background: var(--ix-red-soft);
+}
+
+/* Paste box. */
+
+.ioc-excavator .ix-paste {
+    margin-top: 16px;
+}
+
+.ioc-excavator .ix-paste summary {
+    cursor: pointer;
+    font-size: 13.5px;
+    color: var(--ix-text-2);
+    padding: 6px 0;
+    width: max-content;
+}
+
+.ioc-excavator .ix-paste-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.ioc-excavator .ix-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--ix-text-3);
+}
+
+.ioc-excavator .ix-field input {
+    font-family: var(--ix-mono);
+    font-size: 13px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--ix-text);
+    background: var(--ix-surface-2);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    padding: 8px 12px;
+}
+
+.ioc-excavator textarea {
+    width: 100%;
+    resize: vertical;
+    font-family: var(--ix-mono);
+    font-size: 13px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.6;
+    color: var(--ix-text);
+    background: var(--ix-surface-2);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    padding: 12px 14px;
+}
+
+.ioc-excavator .ix-paste-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.ioc-excavator .ix-hint {
+    font-size: 12.5px;
+    color: var(--ix-text-3);
+}
+
+.ioc-excavator .ix-hint.ix-ok {
+    color: var(--ix-text-2);
+}
+
+.ioc-excavator .ix-hint.ix-bad {
+    color: var(--ix-amber);
+}
+
+.ioc-excavator .ix-paste-foot .ix-btn {
+    margin-left: auto;
+}
+
+/* Splunk scope, Extract and Clear. */
+
+.ioc-excavator .ix-controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--ix-line-soft);
+}
+
+.ioc-excavator .ix-stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    color: var(--ix-text-2);
+    margin: 0;
+}
+
+.ioc-excavator .ix-stepper input {
+    width: 260px;
+    max-width: 100%;
+    padding: 7px 10px;
+    font-family: var(--ix-mono);
+    font-size: 13.5px;
+    color: var(--ix-text);
+    background: var(--ix-surface);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+}
+
+.ioc-excavator .ix-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+}
+
+.ioc-excavator .ix-btn {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 550;
+    padding: 9px 18px;
+    border-radius: var(--ix-radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+
+.ioc-excavator .ix-btn-primary {
+    background: var(--ix-text);
+    color: var(--ix-surface);
+}
+
+.ioc-excavator .ix-btn-primary:hover {
+    background: var(--ix-red-deep);
+}
+
+.ioc-excavator .ix-btn-ghost {
+    background: transparent;
+    border-color: var(--ix-line);
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-btn-ghost:hover {
+    background: var(--ix-surface-2);
+}
+
+.ioc-excavator .ix-btn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.ioc-excavator .ix-btn-sm {
+    font-size: 13px;
+    padding: 6px 12px;
+}
+
+.ioc-excavator button:focus-visible,
+.ioc-excavator input:focus-visible,
+.ioc-excavator textarea:focus-visible,
+.ioc-excavator summary:focus-visible {
+    outline: 2px solid var(--ix-red);
+    outline-offset: 2px;
+    border-radius: var(--ix-radius-sm);
+}
+
+/* Result counts, advisory notices, filter and export bar. */
+
+.ioc-excavator .ix-results {
+    margin-top: 28px;
+}
+
+.ioc-excavator .ix-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.ioc-excavator .ix-stat {
+    background: var(--ix-surface);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    padding: 14px 16px;
+}
+
+.ioc-excavator .ix-stat b {
+    display: block;
+    font-size: 26px;
+    font-weight: 650;
+    letter-spacing: -.03em;
+    font-variant-numeric: tabular-nums;
+}
+
+.ioc-excavator .ix-stat span {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--ix-text-3);
+    font-weight: 600;
+}
+
+.ioc-excavator .ix-notice {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--ix-red-soft);
+    border: 1px solid var(--ix-red);
+    border-radius: var(--ix-radius-sm);
+    padding: 12px 14px;
+    font-size: 13.5px;
+    color: var(--ix-text);
+    margin-bottom: 10px;
+}
+
+.ioc-excavator .ix-notice b {
+    font-weight: 650;
+}
+
+.ioc-excavator .ix-notice-quiet {
+    background: var(--ix-surface-2);
+    border-color: var(--ix-line);
+}
+
+.ioc-excavator .ix-meta {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--ix-text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.ioc-excavator .ix-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 0 14px;
+}
+
+.ioc-excavator .ix-segmented {
+    display: inline-flex;
+    background: var(--ix-slate-soft);
+    border-radius: var(--ix-radius-sm);
+    padding: 3px;
+    gap: 2px;
+    flex-wrap: wrap;
+}
+
+.ioc-excavator .ix-segmented button {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    text-transform: capitalize;
+    color: var(--ix-text-2);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 5px 13px;
+    cursor: pointer;
+}
+
+.ioc-excavator .ix-segmented button[aria-pressed="true"] {
+    background: var(--ix-text);
+    color: var(--ix-surface);
+    font-weight: 650;
+}
+
+.ioc-excavator .ix-segmented button:not([aria-pressed="true"]):hover {
+    background: var(--ix-surface);
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* One category: header badges, indicator rows, Splunk search. */
+
+.ioc-excavator .ix-cat {
+    background: var(--ix-surface);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius);
+    margin-bottom: 10px;
+    overflow: hidden;
+}
+
+.ioc-excavator .ix-cat-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--ix-line-soft);
+    background: var(--ix-surface-2);
+}
+
+.ioc-excavator .ix-label {
+    font-weight: 650;
+    font-size: 14.5px;
+}
+
+.ioc-excavator .ix-badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--ix-slate-soft);
+    color: var(--ix-text-2);
+    font-variant-numeric: tabular-nums;
+}
+
+.ioc-excavator .ix-group-tag {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ix-text-3);
+}
+
+.ioc-excavator .ix-cat-body {
+    padding: 16px;
+}
+
+.ioc-excavator .ix-cat-note {
+    font-size: 12.5px;
+    color: var(--ix-text-2);
+    background: var(--ix-amber-soft);
+    border: 1px solid var(--ix-amber);
+    border-radius: var(--ix-radius-sm);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+}
+
+.ioc-excavator .ix-items {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.ioc-excavator .ix-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 3px 0;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.ioc-excavator .ix-ctx {
+    color: var(--ix-text-2);
+    font-size: 12.5px;
+}
+
+.ioc-excavator .ix-rel {
+    color: var(--ix-text-3);
+    font-family: var(--ix-mono);
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.ioc-excavator .ix-src {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--ix-text-3);
+    border: 1px solid var(--ix-line-soft);
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+
+.ioc-excavator .ix-link {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--ix-text-2);
+    text-decoration: none;
+    border-bottom: 1px solid var(--ix-line);
+}
+
+.ioc-excavator .ix-link:hover {
+    color: var(--ix-text);
+    border-bottom-color: var(--ix-text-2);
+}
+
+/* The indicator value. Click copies it. Red marks one that will also hit
+   benign traffic, so a red row always means "scope this before hunting". */
+
+.ioc-excavator .ix-value {
+    font-family: var(--ix-mono);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: inherit;
+    color: var(--ix-text);
+    background: var(--ix-slate-soft);
+    border: 0;
+    border-radius: 3px;
+    padding: 1px 6px;
+    margin: 0;
+    cursor: pointer;
+    vertical-align: baseline;
+    word-break: break-all;
+    text-align: left;
+    transition: background .14s ease, color .14s ease;
+}
+
+.ioc-excavator .ix-value:hover {
+    background: var(--ix-text);
+    color: var(--ix-surface);
+}
+
+.ioc-excavator .ix-value.ix-flagged {
+    background: var(--ix-red);
+    color: #FFF;
+}
+
+.ioc-excavator .ix-value.ix-flagged:hover {
+    background: var(--ix-red-deep);
+}
+
+/* Drawn inside the box, so focus never changes the element's size. */
+.ioc-excavator .ix-value:focus-visible {
+    outline: 2px solid var(--ix-mark);
+    outline-offset: -2px;
+}
+
+/* Splunk search block. */
+
+.ioc-excavator .ix-spl {
+    margin-top: 14px;
+    border-top: 1px solid var(--ix-line-soft);
+    padding-top: 12px;
+}
+
+.ioc-excavator .ix-spl summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ix-text-2);
+    width: max-content;
+}
+
+.ioc-excavator .ix-spl-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.ioc-excavator .ix-spl pre {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    font-family: var(--ix-mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--ix-text);
+    background: var(--ix-surface-2);
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.ioc-excavator .ix-spl-inner .ix-btn {
+    align-self: flex-start;
+}
+
+/* Empty and error states. */
+
+.ioc-excavator .ix-empty,
+.ioc-excavator .ix-err {
+    border-radius: var(--ix-radius);
+    padding: 40px 24px;
+    text-align: center;
+    border: 1px solid var(--ix-line);
+    background: var(--ix-surface);
+    margin-top: 20px;
+}
+
+.ioc-excavator .ix-empty strong {
+    display: block;
+    font-size: 17px;
+    font-weight: 650;
+    margin-bottom: 4px;
+}
+
+.ioc-excavator .ix-empty span {
+    color: var(--ix-text-2);
+    font-size: 14px;
+}
+
+.ioc-excavator .ix-err {
+    text-align: left;
+    padding: 14px 16px;
+    border-color: var(--ix-red);
+    background: var(--ix-red-soft);
+    font-size: 14px;
+}
+
+/* Narrow screens. */
+
+@media (max-width: 720px) {
+    .ioc-excavator .ix-intake {
+        padding: 20px;
+    }
+
+    .ioc-excavator .ix-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .ioc-excavator .ix-actions {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .ioc-excavator .ix-actions .ix-btn {
+        flex: 1;
+    }
+
+    .ioc-excavator .ix-stepper input {
+        width: 100%;
+    }
+}

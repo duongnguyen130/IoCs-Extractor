@@ -1,0 +1,2175 @@
+@page "/IOCExcavator"
+@attribute [NavigationItem("IOC Excavator", NavigationIcon.IOCExcavator, Order = 82)]
+@namespace WebApp.Components.Pages.IOCExcavator
+@attribute [PagePermissionTitle("IOC Excavator")]
+@implements IDisposable
+@using Microsoft.JSInterop
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Globalization
+@using System.Net
+@using System.Net.Sockets
+@using System.Text
+@using System.Text.Json
+@using System.Text.RegularExpressions
+
+@*
+    Needs an interactive render mode. On a .NET 8 Blazor Web App with per-page
+    modes, uncomment:  @rendermode InteractiveServer
+    On classic Blazor Server the page is already interactive.
+*@
+
+<PageHeader PageTitle="IOC Excavator" />
+<PageTitle>IOC Excavator</PageTitle>
+
+@*START HTML*@
+
+<div class="ioc-excavator">
+
+    <section class="ix-card ix-intake">
+        <div class="ix-card-head">
+            <h2>Pull IOCs out of a CISA advisory</h2>
+            <p class="ix-sub">
+                Drop one or more STIX bundles and get de-duplicated lists ready to
+                paste into Excel, plus one broad Splunk search per category.
+            </p>
+        </div>
+
+        <div class="ix-dropzone">
+            <InputFile OnChange="OnFilesChosen" multiple class="ix-fileinput" />
+            <div class="ix-dropzone-inner">
+                <div class="ix-dropzone-icon" aria-hidden="true"></div>
+                <p class="ix-dropzone-title">Drop advisories here, or click to browse</p>
+                <p class="ix-dropzone-sub">
+                    STIX 2.x <code>.json</code> is parsed in full. Any other text file
+                    is swept with regex for IPs, domains, URLs, hashes and CVEs.
+                </p>
+            </div>
+        </div>
+
+        @if (queued.Count > 0)
+        {
+            <ul class="ix-filelist">
+                @foreach (QueuedFile q in queued)
+                {
+                    QueuedFile item = q;
+                    <li>
+                        <span class="ix-fname">
+                            @if (item.Pasted)
+                            {
+                                <span class="ix-tag">pasted</span>
+                            }
+                            @item.Name
+                        </span>
+                        <span class="ix-fsize">@Kb(item.Bytes.Length)</span>
+                        <button type="button" class="ix-remove" title="Remove"
+                                aria-label="@RemoveLabel(item.Name)"
+                                @onclick="() => RemoveFile(item)">&times;</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        <details class="ix-paste">
+            <summary>Paste STIX JSON or an IOC list instead</summary>
+            <div class="ix-paste-inner">
+                <label class="ix-field">
+                    <span>Name (optional)</span>
+                    <input type="text" @bind="pasteName" placeholder="e.g. AA26-293A"
+                           spellcheck="false" autocomplete="off" />
+                </label>
+                <label class="ix-field">
+                    <span>Content</span>
+                    <textarea @bind="pasteText" @bind:event="oninput" rows="7"
+                              spellcheck="false" autocomplete="off"
+                              placeholder="Raw STIX JSON, or plain text holding IPs, hashes, URLs and CVEs."></textarea>
+                </label>
+                <div class="ix-paste-foot">
+                    <span class="ix-hint @PasteHintClass()">@PasteHint()</span>
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            disabled="@(pasteText.Trim().Length == 0)"
+                            @onclick="AddPasted">Add pasted content</button>
+                </div>
+            </div>
+        </details>
+
+        <div class="ix-controls">
+            <label class="ix-stepper">
+                <span>Splunk scope</span>
+                <input type="text" @bind="splunkScope" spellcheck="false" autocomplete="off" />
+            </label>
+
+            <div class="ix-actions">
+                <button type="button" class="ix-btn ix-btn-ghost" @onclick="Wipe">Clear</button>
+                <button type="button" class="ix-btn ix-btn-primary"
+                        @onclick="ExtractAsync" disabled="@(isBusy || queued.Count == 0)">
+                    @(isBusy ? "Extracting..." : "Extract IOCs")
+                </button>
+            </div>
+        </div>
+    </section>
+
+    @if (errorMessage is not null)
+    {
+        <div class="ix-err">@errorMessage</div>
+    }
+    else if (categories.Count > 0)
+    {
+        <section class="ix-results">
+
+            <div class="ix-stats">
+                <div class="ix-stat"><b>@totalItems</b><span>indicators</span></div>
+                @foreach (var g in GroupTotals())
+                {
+                    <div class="ix-stat"><b>@g.Count</b><span>@g.Group</span></div>
+                }
+            </div>
+
+            @if (flaggedCount > 0)
+            {
+                <div class="ix-notice">
+                    <span aria-hidden="true">&#9679;</span>
+                    <div>
+                        <b>@flaggedCount item@(flaggedCount == 1 ? "" : "s") will hit benign traffic.</b>
+                        Shared CDN and cloud ranges, plus admin tools that live on most
+                        hosts. They are still real IOCs; they just need a tighter scope.
+                    </div>
+                </div>
+            }
+
+            @foreach (ReportInfo r in reports)
+            {
+                <div class="ix-notice ix-notice-quiet">
+                    <span aria-hidden="true">&#9675;</span>
+                    <div>
+                        <b>@r.Source</b>
+                        @if (!string.IsNullOrEmpty(r.Title) && r.Title != r.Source)
+                        {
+                            <text> &mdash; @r.Title</text>
+                        }
+                        <span class="ix-meta">
+                            @(string.IsNullOrEmpty(r.Published) ? "no date" : r.Published)
+                            &middot; @r.Indicators indicator@(r.Indicators == 1 ? "" : "s")
+                            &middot; @r.Objects object@(r.Objects == 1 ? "" : "s")
+                            @if (!string.IsNullOrEmpty(r.Note))
+                            {
+                                <text> &middot; @r.Note</text>
+                            }
+                        </span>
+                    </div>
+                </div>
+            }
+
+            @foreach (string e in errors)
+            {
+                <div class="ix-notice ix-notice-quiet">
+                    <span aria-hidden="true">&#9675;</span><div>@e</div>
+                </div>
+            }
+
+            <div class="ix-toolbar">
+                <div class="ix-segmented">
+                    <button type="button" aria-pressed="@Pressed(activeGroup == "all")"
+                            @onclick='() => activeGroup = "all"'>all</button>
+                    @foreach (var g in GroupTotals())
+                    {
+                        string name = g.Group;
+                        <button type="button" aria-pressed="@Pressed(activeGroup == name)"
+                                @onclick="() => activeGroup = name">@ShortGroup(name)</button>
+                    }
+                </div>
+
+                <div class="ix-right">
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            @onclick="CopyAllAsync">
+                        @(copiedKey == "__all" ? "Copied" : "Copy table")
+                    </button>
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            @onclick='() => ExportAsync("csv")'>CSV</button>
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            @onclick='() => ExportAsync("spl")'>SPL</button>
+                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                            @onclick="Wipe">Wipe</button>
+                </div>
+            </div>
+
+            @foreach (IocCategory c in VisibleCategories())
+            {
+                IocCategory cat = c;
+
+                <article class="ix-cat">
+                    <div class="ix-cat-head">
+                        <span class="ix-label">@cat.Label</span>
+                        <span class="ix-badge">@cat.Items.Count</span>
+                        <span class="ix-group-tag">@cat.Group</span>
+
+                        <div class="ix-right">
+                            <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                    @onclick="() => CopyListAsync(cat)">
+                                @(copiedKey == cat.Key + ":list" ? "Copied" : "Copy list")
+                            </button>
+                            <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                    @onclick="() => CopyTableAsync(cat)">
+                                @(copiedKey == cat.Key + ":table" ? "Copied" : "Copy with context")
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="ix-cat-body">
+                        @if (cat.Note is not null)
+                        {
+                            <div class="ix-cat-note">@cat.Note</div>
+                        }
+
+                        <div class="ix-items">
+                            @foreach (IocItem i in cat.Items.Take(MaxRowsShown))
+                            {
+                                IocItem row = i;
+                                <div class="ix-item">
+                                    <button type="button"
+                                            class="@ValueClass(row)"
+                                            title="Click to copy this value"
+                                            @onclick="() => CopyValueAsync(row.Value, cat.Key)">@row.Value</button>
+
+                                    @if (row.Context.Count > 0)
+                                    {
+                                        <span class="ix-ctx">@string.Join("; ", row.Context)</span>
+                                    }
+                                    @if (row.Related.Count > 0)
+                                    {
+                                        <span class="ix-rel">&rarr; @string.Join(", ", row.Related)</span>
+                                    }
+                                    @foreach (string s in row.Sources)
+                                    {
+                                        <span class="ix-src">@s</span>
+                                    }
+                                    @if (row.Nvd is not null)
+                                    {
+                                        <a class="ix-link" href="@row.Nvd" target="_blank" rel="noopener noreferrer">NVD</a>
+                                        <a class="ix-link" href="@row.Kev" target="_blank" rel="noopener noreferrer">KEV</a>
+                                    }
+                                    @if (row.Mitre is not null)
+                                    {
+                                        <a class="ix-link" href="@row.Mitre" target="_blank" rel="noopener noreferrer">ATT&amp;CK</a>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        @if (cat.Items.Count > MaxRowsShown)
+                        {
+                            <div class="ix-cat-note">
+                                Showing the first @MaxRowsShown of @cat.Items.Count.
+                                Copy and export include all of them.
+                            </div>
+                        }
+
+                        @if (cat.Spl is not null)
+                        {
+                            <details class="ix-spl">
+                                <summary>Splunk search &mdash; @cat.Spl.Length.ToString("N0") characters</summary>
+                                <div class="ix-spl-inner">
+                                    <pre>@cat.Spl</pre>
+                                    <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                            @onclick="() => CopySplAsync(cat)">
+                                        @(copiedKey == cat.Key + ":spl" ? "Copied" : "Copy SPL")
+                                    </button>
+                                </div>
+                            </details>
+                        }
+                    </div>
+                </article>
+            }
+
+            @if (!VisibleCategories().Any())
+            {
+                <div class="ix-empty">
+                    <strong>Nothing in this group</strong><span>Try another filter.</span>
+                </div>
+            }
+
+        </section>
+    }
+    else if (hasExtracted)
+    {
+        <div class="ix-empty">
+            <strong>No indicators found</strong>
+            <span>Nothing in those files matched a known IOC shape.</span>
+        </div>
+    }
+
+</div>
+
+@*END HTML*@
+
+@code{
+    [Inject] private IJSRuntime _jsRuntime { get; set; } = default!;
+    private IJSObjectReference jsModule { get; set; } = null!;
+
+    /*
+     * IOC EXCAVATOR
+     *
+     * Reads CISA STIX 2.x bundles, or any text holding indicators, and returns
+     * de-duplicated lists by category with a broad Splunk search for each.
+     *
+     * Two judgements are built in rather than left to the analyst:
+     *
+     *   - Shared infrastructure is flagged, not dropped. A Cloudflare address
+     *     in an advisory is a real IOC that will also match a lot of ordinary
+     *     traffic, and silently removing it loses a finding.
+     *
+     *   - Legitimate admin software is flagged the same way. AnyDesk is an
+     *     IOC in a ransomware advisory and a help-desk tool on Tuesday.
+     *
+     * Nothing is retained: parsed files are dropped on Wipe and on Dispose.
+     */
+
+    // ====================================================================
+    // page state
+    // ====================================================================
+
+    /// <summary>Largest single upload. Must not exceed the SignalR message cap.</summary>
+    private const long MaxUploadBytes = 25L * 1024 * 1024;
+
+    /// <summary>Ceiling across every queued file, so one batch cannot exhaust memory.</summary>
+    private const long MaxTotalBytes = 60L * 1024 * 1024;
+
+    private const int MaxFiles = 25;
+
+    /// <summary>Rows rendered per category. Copy and export are never truncated.</summary>
+    private const int MaxRowsShown = 500;
+
+    /// <summary>Hard ceiling per category, so a pathological file cannot hang the page.</summary>
+    private const int MaxItemsPerCategory = 20000;
+
+    private readonly List<QueuedFile> queued = new();
+    private string pasteText = string.Empty;
+    private string pasteName = string.Empty;
+    private string splunkScope = "index=*";
+
+    private List<IocCategory> categories = new();
+    private List<ReportInfo> reports = new();
+    private List<string> errors = new();
+    private int totalItems;
+    private int flaggedCount;
+
+    private string activeGroup = "all";
+    private string? copiedKey;
+
+    private string? errorMessage;
+    private bool isBusy;
+    private bool hasExtracted;
+
+    /// <summary>One file waiting to be parsed.</summary>
+    private sealed record QueuedFile(string Name, byte[] Bytes, bool Pasted);
+
+    private static string Kb(int bytes) =>
+        bytes < 1024 ? $"{bytes} B"
+        : bytes < 1048576 ? $"{bytes / 1024.0:N1} KB"
+        : $"{bytes / 1048576.0:N1} MB";
+
+    /// <summary>
+    /// aria-pressed as a literal string. A C# bool renders as a boolean
+    /// attribute, which never matches [aria-pressed="true"].
+    /// </summary>
+    private static string Pressed(bool on) => on ? "true" : "false";
+
+    /// <summary>Class list for one value chip. Built here because nested string
+    /// literals in a double-quoted Razor attribute are a parsing hazard.</summary>
+    private static string ValueClass(IocItem item) =>
+        item.Flagged ? "ix-value ix-flagged" : "ix-value";
+
+    /// <summary>Accessible label for a remove button, for the same reason.</summary>
+    private static string RemoveLabel(string fileName) => "Remove " + fileName;
+
+    private static string ShortGroup(string group) => group switch
+    {
+        "Network" => "network",
+        "Hashes" => "hashes",
+        "Host Artifacts" => "host",
+        "Tools & Malware" => "tools",
+        "Vulnerabilities" => "cves",
+        "Behaviors (TTPs)" => "ttps",
+        _ => "other",
+    };
+
+    private IEnumerable<(string Group, int Count)> GroupTotals() =>
+        categories
+            .GroupBy(c => c.Group)
+            .Select(g => (Group: g.Key, Count: g.Sum(c => c.Items.Count)));
+
+    private IEnumerable<IocCategory> VisibleCategories() =>
+        activeGroup == "all"
+            ? categories
+            : categories.Where(c => c.Group == activeGroup);
+
+    private string PasteHint()
+    {
+        string t = pasteText.Trim();
+        if (t.Length == 0)
+        {
+            return "STIX JSON is parsed in full. Anything else is swept with regex.";
+        }
+
+        if (t[0] is '{' or '[')
+        {
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(t, JsonOptions);
+                int n = CountIndicators(doc.RootElement);
+                return $"Valid JSON, {n} indicator{(n == 1 ? "" : "s")}.";
+            }
+            catch (JsonException ex)
+            {
+                return $"Invalid JSON ({ex.Message}). It will be swept as plain text.";
+            }
+        }
+
+        return "Plain text, swept with regex for IPs, domains, URLs, hashes and CVEs.";
+    }
+
+    private string PasteHintClass()
+    {
+        string t = pasteText.Trim();
+        if (t.Length == 0 || t[0] is not ('{' or '[')) { return string.Empty; }
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(t, JsonOptions);
+            return "ix-ok";
+        }
+        catch (JsonException)
+        {
+            return "ix-bad";
+        }
+    }
+
+    private static int CountIndicators(JsonElement root)
+    {
+        IEnumerable<JsonElement> objs =
+            root.ValueKind == JsonValueKind.Array ? root.EnumerateArray()
+            : root.TryGetProperty("objects", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array
+                ? arr.EnumerateArray()
+                : new[] { root };
+
+        return objs.Count(o => o.ValueKind == JsonValueKind.Object
+                            && Str(o, "type") == "indicator");
+    }
+
+    // ====================================================================
+    // intake
+    // ====================================================================
+
+    /// <summary>Queues chosen files. Nothing is parsed until Extract is pressed.</summary>
+    private async Task OnFilesChosen(InputFileChangeEventArgs e)
+    {
+        errorMessage = null;
+
+        foreach (IBrowserFile file in e.GetMultipleFiles(MaxFiles))
+        {
+            if (queued.Count >= MaxFiles)
+            {
+                errorMessage = $"Only {MaxFiles} files at a time. Extract these first.";
+                break;
+            }
+
+            if (file.Size > MaxUploadBytes)
+            {
+                errors.Add($"{file.Name}: over {MaxUploadBytes / 1048576} MB, skipped.");
+                continue;
+            }
+
+            if (queued.Sum(q => (long)q.Bytes.Length) + file.Size > MaxTotalBytes)
+            {
+                errorMessage = $"That batch exceeds {MaxTotalBytes / 1048576} MB in total.";
+                break;
+            }
+
+            byte[]? bytes = await ReadFileAsync(file);
+            if (bytes is null)
+            {
+                errors.Add($"{file.Name}: could not be read.");
+                continue;
+            }
+
+            if (queued.Any(q => q.Name == file.Name && q.Bytes.Length == bytes.Length))
+            {
+                continue;
+            }
+
+            queued.Add(new QueuedFile(file.Name, bytes, false));
+        }
+    }
+
+    /// <summary>Reads one upload, tolerating the short reads a browser stream returns.</summary>
+    private static async Task<byte[]?> ReadFileAsync(IBrowserFile file)
+    {
+        try
+        {
+            byte[] buffer = new byte[file.Size];
+            await using Stream stream = file.OpenReadStream(MaxUploadBytes);
+
+            int filled = 0;
+            while (filled < buffer.Length)
+            {
+                int read = await stream.ReadAsync(buffer.AsMemory(filled));
+                if (read == 0) { break; }
+                filled += read;
+            }
+
+            return filled == buffer.Length ? buffer : null;
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> ReadFileAsync() has caught an exception!");
+            return null;
+        }
+    }
+
+    private void AddPasted()
+    {
+        string text = pasteText.Trim();
+        if (text.Length == 0) { return; }
+
+        bool looksJson = text[0] is '{' or '[';
+        string baseName = pasteName.Trim();
+
+        if (baseName.Length == 0)
+        {
+            Match m = AdvisoryIdRe.Match(text);
+            baseName = m.Success ? m.Value.ToUpperInvariant() : $"pasted-{queued.Count + 1}";
+        }
+
+        baseName = SafeNameRe.Replace(baseName, "_");
+        if (baseName.Length > 60) { baseName = baseName[..60]; }
+
+        string ext = looksJson ? ".json" : ".txt";
+        string name = baseName.EndsWith(ext, StringComparison.OrdinalIgnoreCase)
+            ? baseName
+            : baseName + ext;
+
+        int suffix = 1;
+        string candidate = name;
+        while (queued.Any(q => q.Name == candidate))
+        {
+            candidate = $"{baseName}-{++suffix}{ext}";
+        }
+
+        queued.Add(new QueuedFile(candidate, Encoding.UTF8.GetBytes(pasteText), true));
+        pasteText = string.Empty;
+        pasteName = string.Empty;
+        errorMessage = null;
+    }
+
+    private void RemoveFile(QueuedFile file) => queued.Remove(file);
+
+    // ====================================================================
+    // extraction run
+    // ====================================================================
+
+    private Task ExtractAsync()
+    {
+        isBusy = true;
+        errorMessage = null;
+        copiedKey = null;
+
+        try
+        {
+            if (queued.Count == 0)
+            {
+                errorMessage = "Add a file or paste some content first.";
+                return Task.CompletedTask;
+            }
+
+            var store = new IocStore();
+            var runReports = new List<ReportInfo>();
+            var runErrors = new List<string>();
+
+            foreach (QueuedFile file in queued)
+            {
+                try
+                {
+                    runReports.Add(ParseOne(file, store));
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    runErrors.Add($"{file.Name}: pattern matching timed out, skipped.");
+                }
+                catch (Exception ex)
+                {
+                    runErrors.Add($"{file.Name}: {ex.Message}");
+                }
+            }
+
+            categories = BuildCategories(store, splunkScope);
+            reports = runReports;
+            errors = runErrors;
+            totalItems = categories.Sum(c => c.Items.Count);
+            flaggedCount = categories.Sum(c => c.Items.Count(i => i.Flagged));
+            activeGroup = "all";
+            hasExtracted = true;
+
+            if (store.Truncated)
+            {
+                errors.Add($"At least one category hit the {MaxItemsPerCategory:N0} item " +
+                           "ceiling and was cut short.");
+            }
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> ExtractAsync() has caught an exception!");
+            errorMessage = "Those files could not be parsed. STIX 2.x JSON or plain " +
+                           "text IOC lists work best.";
+        }
+        finally
+        {
+            isBusy = false;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Parses one queued file as STIX when it is JSON, as text otherwise.</summary>
+    private static ReportInfo ParseOne(QueuedFile file, IocStore store)
+    {
+        string text = Decode(file.Bytes);
+        string trimmed = text.TrimStart();
+
+        if (trimmed.Length > 0 && trimmed[0] is '{' or '[')
+        {
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(text, JsonOptions);
+                return ParseStix(doc.RootElement, file.Name, store);
+            }
+            catch (JsonException)
+            {
+                // malformed JSON is still worth sweeping; say so in the report row
+            }
+        }
+
+        Match m = AdvisoryIdRe.Match(file.Name);
+        string source = m.Success
+            ? m.Value.ToUpperInvariant()
+            : Clip(file.Name.Split('.')[0], 40);
+
+        TextSweep(store, text, source, deep: true);
+
+        return new ReportInfo
+        {
+            Source = source,
+            Title = file.Name,
+            Published = string.Empty,
+            File = file.Name,
+            Indicators = 0,
+            Objects = 0,
+            Note = "swept as plain text",
+        };
+    }
+
+    /// <summary>Decodes as UTF-8, falling back to Latin-1 rather than throwing.</summary>
+    private static string Decode(byte[] data)
+    {
+        try
+        {
+            return new UTF8Encoding(false, throwOnInvalidBytes: true)
+                .GetString(data).TrimStart('﻿');
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(data);
+        }
+    }
+
+    private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
+
+    // ====================================================================
+    // clipboard and export
+    // ====================================================================
+
+    private async Task CopyValueAsync(string value, string key)
+    {
+        if (await CopyAsync(value)) { copiedKey = key; }
+    }
+
+    private async Task CopyListAsync(IocCategory cat)
+    {
+        string text = string.Join("\n", cat.Items.Select(i => i.Value));
+        if (await CopyAsync(text)) { copiedKey = cat.Key + ":list"; }
+    }
+
+    private async Task CopyTableAsync(IocCategory cat)
+    {
+        if (await CopyAsync(Tsv(new[] { cat }, header: true)))
+        {
+            copiedKey = cat.Key + ":table";
+        }
+    }
+
+    private async Task CopySplAsync(IocCategory cat)
+    {
+        if (cat.Spl is not null && await CopyAsync(cat.Spl))
+        {
+            copiedKey = cat.Key + ":spl";
+        }
+    }
+
+    private async Task CopyAllAsync()
+    {
+        if (await CopyAsync(Tsv(categories, header: true))) { copiedKey = "__all"; }
+    }
+
+    private async Task<bool> CopyAsync(string text)
+    {
+        if (jsModule is null) { return false; }
+
+        try
+        {
+            return await jsModule.InvokeAsync<bool>("copyText", text);
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> CopyAsync() has caught an exception!");
+            return false;
+        }
+    }
+
+    /// <summary>Tab-separated rows, which paste straight into Excel columns.</summary>
+    private static string Tsv(IEnumerable<IocCategory> cats, bool header)
+    {
+        var sb = new StringBuilder();
+        if (header) { sb.AppendLine("Category\tValue\tContext\tRelated\tSource"); }
+
+        foreach (IocCategory c in cats)
+        {
+            foreach (IocItem i in c.Items)
+            {
+                sb.Append(Cell(c.Label)).Append('\t')
+                  .Append(Cell(i.Value)).Append('\t')
+                  .Append(Cell(string.Join("; ", i.Context))).Append('\t')
+                  .Append(Cell(string.Join("; ", i.Related))).Append('\t')
+                  .Append(Cell(string.Join("; ", i.Sources))).Append('\n');
+            }
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>
+    /// Flattens a cell to one line and defuses spreadsheet formula injection.
+    ///
+    /// Values come out of an uploaded advisory, and Excel or Sheets executes a
+    /// cell beginning with = + - @@ or a control character. Without the leading
+    /// apostrophe a crafted bundle turns this export into code execution on
+    /// whoever opens it.
+    /// </summary>
+    private static string Cell(string? value)
+    {
+        string s = (value ?? string.Empty).Replace('\t', ' ')
+                                          .Replace('\r', ' ')
+                                          .Replace('\n', ' ')
+                                          .Trim();
+
+        return s.Length > 0 && "=+-@".IndexOf(s[0]) >= 0 ? "'" + s : s;
+    }
+
+    private static string CsvCell(string? value)
+    {
+        string s = Cell(value);
+        return "\"" + s.Replace("\"", "\"\"") + "\"";
+    }
+
+    private async Task ExportAsync(string kind)
+    {
+        if (jsModule is null || categories.Count == 0) { return; }
+
+        string stamp = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        string name;
+        string mime;
+        var sb = new StringBuilder();
+
+        if (kind == "spl")
+        {
+            foreach (IocCategory c in categories.Where(c => c.Spl is not null))
+            {
+                sb.AppendLine($"### {c.Label} ({c.Items.Count})");
+                if (c.Note is not null) { sb.AppendLine($"# {c.Note}"); }
+                sb.AppendLine(c.Spl);
+                sb.AppendLine();
+            }
+
+            name = $"splunk_searches_{stamp}.txt";
+            mime = "text/plain";
+        }
+        else
+        {
+            // UTF-8 BOM so Excel opens non-ASCII values correctly
+            sb.Append('﻿');
+            sb.Append("Category,Value,Context,Related,Source\r\n");
+
+            foreach (IocCategory c in categories)
+            {
+                foreach (IocItem i in c.Items)
+                {
+                    sb.Append(CsvCell(c.Label)).Append(',')
+                      .Append(CsvCell(i.Value)).Append(',')
+                      .Append(CsvCell(string.Join("; ", i.Context))).Append(',')
+                      .Append(CsvCell(string.Join("; ", i.Related))).Append(',')
+                      .Append(CsvCell(string.Join("; ", i.Sources))).Append("\r\n");
+                }
+            }
+
+            name = $"cisa_iocs_{stamp}.csv";
+            mime = "text/csv";
+        }
+
+        try
+        {
+            await jsModule.InvokeVoidAsync("downloadText", name, mime, sb.ToString());
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> ExportAsync() has caught an exception!");
+        }
+    }
+
+    /// <summary>Drops every copy this page is holding.</summary>
+    private void Wipe()
+    {
+        queued.Clear();
+        categories = new List<IocCategory>();
+        reports = new List<ReportInfo>();
+        errors = new List<string>();
+        totalItems = 0;
+        flaggedCount = 0;
+        pasteText = string.Empty;
+        pasteName = string.Empty;
+        activeGroup = "all";
+        copiedKey = null;
+        errorMessage = null;
+        hasExtracted = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (firstRender)
+            {
+                jsModule = await _jsRuntime.InvokeAsync<IJSObjectReference>(
+                    "import",
+                    "./Components/Pages/IOCExcavator/IOCExcavator.razor.js");
+            }
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> OnAfterRenderAsync() has caught an exception!");
+        }
+    }
+
+    public void Dispose()
+    {
+        Wipe();
+        _ = DisposeJsModuleAsync();
+    }
+
+    private async Task DisposeJsModuleAsync()
+    {
+        if (jsModule is not null)
+        {
+            try
+            {
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    // ====================================================================
+    // model types
+    // ====================================================================
+
+    /// <summary>One de-duplicated indicator with everything learned about it.</summary>
+    private sealed class IocItem
+    {
+        public string Value { get; init; } = string.Empty;
+        public List<string> Context { get; } = new();
+        public List<string> Related { get; } = new();
+        public List<string> Sources { get; } = new();
+
+        /// <summary>Will match benign traffic: shared infrastructure or ordinary admin software.</summary>
+        public bool Flagged { get; set; }
+
+        /// <summary>Named in the advisory but its process name was not verified.</summary>
+        public bool Guess { get; set; }
+
+        /// <summary>The value to search for, when it differs from the display value.</summary>
+        public string? Raw { get; set; }
+
+        public string? Nvd { get; set; }
+        public string? Kev { get; set; }
+        public string? Mitre { get; set; }
+    }
+
+    /// <summary>One category of indicators, with its Splunk search.</summary>
+    private sealed class IocCategory
+    {
+        public string Key { get; init; } = string.Empty;
+        public string Label { get; init; } = string.Empty;
+        public string Group { get; init; } = string.Empty;
+        public List<IocItem> Items { get; init; } = new();
+        public string? Spl { get; set; }
+        public string? Note { get; set; }
+    }
+
+    /// <summary>One advisory that was parsed.</summary>
+    private sealed class ReportInfo
+    {
+        public string Source { get; init; } = string.Empty;
+        public string Title { get; init; } = string.Empty;
+        public string Published { get; init; } = string.Empty;
+        public string File { get; init; } = string.Empty;
+        public int Indicators { get; init; }
+        public int Objects { get; init; }
+        public string Note { get; init; } = string.Empty;
+    }
+
+    /// <summary>
+    /// De-duplicating collector. Insertion order is preserved per category,
+    /// because an analyst reads the list in the order the advisory listed it.
+    /// </summary>
+    private sealed class IocStore
+    {
+        private readonly Dictionary<string, List<IocItem>> order = new();
+        private readonly Dictionary<string, Dictionary<string, IocItem>> index = new();
+
+        public bool Truncated { get; private set; }
+
+        public IocStore()
+        {
+            foreach ((string key, _, _) in Categories)
+            {
+                order[key] = new List<IocItem>();
+                index[key] = new Dictionary<string, IocItem>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        public List<IocItem> Items(string category) => order[category];
+
+        public bool Has(string category, string value) =>
+            index[category].ContainsKey(value.Trim());
+
+        public IocItem? Add(string category, string? value, string source,
+                            string? context = null, IEnumerable<string>? related = null)
+        {
+            if (value is null) { return null; }
+
+            string v = value.Trim();
+            if (v.Length == 0 || v.Length > 4096) { return null; }
+
+            if (LowercaseCategories.Contains(category)) { v = v.ToLowerInvariant(); }
+
+            Dictionary<string, IocItem> bucket = index[category];
+
+            if (!bucket.TryGetValue(v, out IocItem? item))
+            {
+                if (order[category].Count >= MaxItemsPerCategory)
+                {
+                    Truncated = true;
+                    return null;
+                }
+
+                item = new IocItem { Value = v };
+                bucket[v] = item;
+                order[category].Add(item);
+            }
+
+            if (!string.IsNullOrEmpty(source) && !item.Sources.Contains(source))
+            {
+                item.Sources.Add(source);
+            }
+
+            if (!string.IsNullOrEmpty(context) && !item.Context.Contains(context))
+            {
+                item.Context.Add(context);
+            }
+
+            foreach (string r in related ?? Enumerable.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(r)
+                    && !string.Equals(r, v, StringComparison.OrdinalIgnoreCase)
+                    && !item.Related.Contains(r))
+                {
+                    item.Related.Add(r);
+                }
+            }
+
+            return item;
+        }
+    }
+
+    // ====================================================================
+    // category registry  -- order here is display order
+    // ====================================================================
+
+    private static readonly (string Key, string Label, string Group)[] Categories =
+    {
+        ("ipv4",        "IPv4 Addresses",                "Network"),
+        ("ipv6",        "IPv6 Addresses",                "Network"),
+        ("domain",      "Domains",                       "Network"),
+        ("url",         "URLs",                          "Network"),
+        ("email",       "Email Addresses",               "Network"),
+        ("sha256",      "SHA-256 Hashes",                "Hashes"),
+        ("sha1",        "SHA-1 Hashes",                  "Hashes"),
+        ("md5",         "MD5 Hashes",                    "Hashes"),
+        ("sha512",      "SHA-512 Hashes",                "Hashes"),
+        ("ssdeep",      "SSDEEP (fuzzy) Hashes",         "Hashes"),
+        ("filename",    "File Names",                    "Host Artifacts"),
+        ("commandline", "Command Lines",                 "Host Artifacts"),
+        ("registry",    "Registry Keys",                 "Host Artifacts"),
+        ("mutex",       "Mutexes",                       "Host Artifacts"),
+        ("tool",        "Tools & Software",              "Tools & Malware"),
+        ("malware",     "Malware / Ransomware Families", "Tools & Malware"),
+        ("actor",       "Threat Actors",                 "Tools & Malware"),
+        ("cve",         "CVEs",                          "Vulnerabilities"),
+        ("technique",   "MITRE ATT&CK Techniques",       "Behaviors (TTPs)"),
+        ("other",       "Other Observables",             "Other"),
+    };
+
+    private static readonly HashSet<string> LowercaseCategories = new()
+    {
+        "md5", "sha1", "sha256", "sha512", "domain", "email",
+    };
+
+    private static readonly Dictionary<string, string> HashTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["md5"] = "md5", ["sha1"] = "sha1", ["sha256"] = "sha256",
+        ["sha512"] = "sha512", ["ssdeep"] = "ssdeep",
+    };
+
+    /// <summary>CVEs are listed, never searched: a CVE id rarely appears in a log.</summary>
+    private static readonly HashSet<string> NoSearch = new() { "cve" };
+
+    private static readonly HashSet<string> SkipNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "unknown", "", "n/a", "none",
+    };
+
+    // ====================================================================
+    // patterns
+    // ====================================================================
+
+    /// <summary>
+    /// Ceiling on any single match against uploaded content, so a crafted
+    /// advisory cannot pin the request thread indefinitely.
+    /// </summary>
+    private static readonly TimeSpan RegexLimit = TimeSpan.FromSeconds(2);
+
+    private static readonly JsonDocumentOptions JsonOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip,
+        MaxDepth = 64,
+    };
+
+    /// <summary>A STIX pattern comparison: object-type:path OP 'value'.</summary>
+    private static readonly Regex PatternRe = new(
+        @"([a-z0-9][a-z0-9-]*):([A-Za-z0-9_.'\-\[\]\*]+?)\s*(?:=|LIKE|MATCHES)\s*'((?:[^'\\]|\\.)*)'",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex TechNameRe = new(
+        @"^(?<tactic>.+?)\s*/\s*(?<name>.+?)\s*\[(?<id>T\d{4}(?:\.\d{3})?)\]",
+        RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex TechIdRe = new(
+        @"\bT\d{4}(?:\.\d{3})?\b", RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex CveRe = new(
+        @"\bCVE-\d{4}-\d{4,7}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    /// <summary>CISA advisory id, e.g. AA26-293A.</summary>
+    private static readonly Regex AdvisoryIdRe = new(
+        @"\bAA\d{2}-\d{3}[A-Z]?\b", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex Ipv4Re = new(
+        @"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\d.])",
+        RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex HexRe = new(
+        @"(?<![0-9a-fA-F])(?:[0-9a-fA-F]{128}|[0-9a-fA-F]{64}|[0-9a-fA-F]{40}|[0-9a-fA-F]{32})(?![0-9a-fA-F])",
+        RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex EmailRe = new(
+        @"\b[A-Za-z0-9._%+-]+@@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b",
+        RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex UrlRe = new(
+        @"\b(?:https?|ftp)://[^\s'""<>\]\[)]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex DomainRe = new(
+        @"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,23}\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex FileNameRe = new(
+        @"(?<![\w.-])[\w\-]{1,80}\.(?:exe|dll|ps1|psm1|bat|cmd|vbs|vbe|js|jse|hta|msi|scr|lnk|jar|sys|py|sh|elf|iso|img|zip|rar|7z)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex HashPathRe = new(
+        @"hashes\.'?([A-Za-z0-9-]+)'?", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex StopRansomwareRe = new(
+        @"^\s*#?StopRansomware:?\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex PastedNameRe = new(
+        @"^pasted-\d+$", RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex SafeNameRe = new(
+        @"[^\w.\- ]", RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex NumericOnlyRe = new(
+        @"^[\d.]+$", RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex TrailingRansomwareRe = new(
+        @"\s+ransomware$", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexLimit);
+
+    private static readonly Regex NonAlnumRe = new(
+        @"[^a-z0-9]", RegexOptions.Compiled, RegexLimit);
+
+    /// <summary>Extensions that make a "domain" match actually a file name.</summary>
+    private static readonly HashSet<string> FileExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "exe", "dll", "ps1", "psm1", "bat", "cmd", "vbs", "vbe", "js", "jse", "hta",
+        "msi", "scr", "lnk", "jar", "sys", "py", "sh", "elf", "iso", "img", "zip",
+        "rar", "7z", "txt", "log", "json", "xml", "csv", "pdf", "doc", "docx", "xls",
+        "xlsx", "ppt", "pptx", "dat", "tmp", "ini", "cfg", "conf", "html", "htm",
+        "php", "aspx", "asp", "png", "jpg", "gif", "bin", "db", "md",
+    };
+
+    // ====================================================================
+    // hunt library  -- names in an advisory turned into huntable artifacts
+    // ====================================================================
+
+    /// <summary>
+    /// Software an advisory names, with the process names worth searching.
+    /// Noisy entries are legitimate admin software present on most hosts; they
+    /// are flagged rather than dropped, because they are still real IOCs.
+    /// </summary>
+    private sealed record ToolInfo(
+        string Label, string Kind, string[] Processes, string[] Keywords, bool Noisy);
+
+    private static readonly Dictionary<string, ToolInfo> Tools = new(StringComparer.Ordinal)
+    {
+        ["anydesk"] = new("AnyDesk", "Remote access (RMM)",
+            new[] { "AnyDesk.exe" }, new[] { "anydesk.com" }, false),
+        ["screenconnect"] = new("ScreenConnect", "Remote access (RMM)",
+            new[] { "ScreenConnect.ClientService.exe", "ScreenConnect.WindowsClient.exe", "ScreenConnect.Service.exe" },
+            new[] { "screenconnect.com" }, false),
+        ["simplehelp"] = new("SimpleHelp", "Remote access (RMM)",
+            new[] { "Remote Access.exe", "session_win.exe" },
+            new[] { "JWrapper-Remote Access", "SimpleHelp" }, false),
+        ["teamviewer"] = new("TeamViewer", "Remote access (RMM)",
+            new[] { "TeamViewer.exe", "TeamViewer_Service.exe" },
+            new[] { "teamviewer.com" }, true),
+        ["atera"] = new("Atera", "Remote access (RMM)",
+            new[] { "AteraAgent.exe" }, new[] { "atera.com" }, false),
+        ["splashtop"] = new("Splashtop", "Remote access (RMM)",
+            new[] { "SRService.exe", "SRManager.exe", "strwinclt.exe" },
+            new[] { "splashtop.com" }, false),
+        ["ngrok"] = new("ngrok", "Tunneling",
+            new[] { "ngrok.exe" }, new[] { "ngrok.io", "ngrok-free.app" }, false),
+        ["rclone"] = new("Rclone", "Exfiltration",
+            new[] { "rclone.exe" }, new[] { "rclone.conf" }, false),
+        ["megasync"] = new("MEGAsync", "Exfiltration",
+            new[] { "MEGAsync.exe" }, new[] { "mega.nz", "mega.io" }, false),
+        ["backblaze"] = new("Backblaze", "Exfiltration (cloud storage)",
+            new[] { "bzbui.exe", "bzserv.exe", "bztransmit.exe" },
+            new[] { "backblazeb2.com", "backblaze.com" }, false),
+        ["filezilla"] = new("FileZilla", "Exfiltration (FTP/SFTP)",
+            new[] { "filezilla.exe", "fzsftp.exe" }, Array.Empty<string>(), false),
+        ["winscp"] = new("WinSCP", "Exfiltration (SFTP)",
+            new[] { "WinSCP.exe" }, Array.Empty<string>(), false),
+        ["putty"] = new("PuTTY", "Remote shell / tunneling",
+            new[] { "putty.exe", "plink.exe", "pscp.exe" }, Array.Empty<string>(), false),
+        ["psexec"] = new("PsExec", "Lateral movement",
+            new[] { "PsExec.exe", "PsExec64.exe", "PSEXESVC.exe" }, Array.Empty<string>(), false),
+        ["mimikatz"] = new("Mimikatz", "Credential dumping",
+            new[] { "mimikatz.exe" },
+            new[] { "sekurlsa::", "lsadump::", "kerberos::" }, false),
+        ["procdump"] = new("ProcDump", "Credential dumping",
+            new[] { "procdump.exe", "procdump64.exe" }, Array.Empty<string>(), false),
+        ["adfind"] = new("AdFind", "Discovery",
+            new[] { "AdFind.exe" }, Array.Empty<string>(), false),
+        ["sharphound"] = new("SharpHound", "Discovery",
+            new[] { "SharpHound.exe" }, new[] { "SharpHound" }, false),
+        ["bloodhound"] = new("BloodHound", "Discovery",
+            new[] { "SharpHound.exe" }, new[] { "SharpHound", "BloodHound" }, false),
+        ["netscan"] = new("SoftPerfect NetScan", "Discovery",
+            new[] { "netscan.exe" }, Array.Empty<string>(), false),
+        ["softperfect"] = new("SoftPerfect NetScan", "Discovery",
+            new[] { "netscan.exe" }, Array.Empty<string>(), false),
+        ["advancedipscanner"] = new("Advanced IP Scanner", "Discovery",
+            new[] { "advanced_ip_scanner.exe" }, Array.Empty<string>(), false),
+        ["ccleaner"] = new("CCleaner", "Anti-forensics",
+            new[] { "CCleaner.exe", "CCleaner64.exe" }, Array.Empty<string>(), false),
+        ["winrar"] = new("WinRAR", "Archiving / staging",
+            new[] { "WinRAR.exe", "Rar.exe" }, Array.Empty<string>(), true),
+        ["7zip"] = new("7-Zip", "Archiving / staging",
+            new[] { "7z.exe", "7za.exe", "7zG.exe" }, Array.Empty<string>(), true),
+        ["winrm"] = new("WinRM", "Lateral movement",
+            new[] { "wsmprovhost.exe", "winrshost.exe", "winrs.exe" }, Array.Empty<string>(), true),
+        ["powershell"] = new("PowerShell", "Execution",
+            new[] { "powershell.exe", "pwsh.exe" }, Array.Empty<string>(), true),
+        ["certutil"] = new("certutil", "LOLBin",
+            new[] { "certutil.exe" }, Array.Empty<string>(), true),
+        ["bitsadmin"] = new("BITSAdmin", "LOLBin",
+            new[] { "bitsadmin.exe" }, Array.Empty<string>(), true),
+        ["vssadmin"] = new("vssadmin", "Inhibit recovery",
+            new[] { "vssadmin.exe" }, Array.Empty<string>(), true),
+        ["nltest"] = new("nltest", "Discovery",
+            new[] { "nltest.exe" }, Array.Empty<string>(), true),
+        ["wmic"] = new("WMIC", "Execution",
+            new[] { "wmic.exe" }, Array.Empty<string>(), true),
+        ["cobaltstrike"] = new("Cobalt Strike", "C2 framework",
+            Array.Empty<string>(),
+            new[] { "Cobalt Strike", "CobaltStrike", "beacon.dll" }, false),
+        ["impacket"] = new("Impacket", "Lateral movement",
+            Array.Empty<string>(),
+            new[] { "__output", "wmiexec", "smbexec", "secretsdump" }, false),
+    };
+
+    private static string NormName(string? name) =>
+        NonAlnumRe.Replace((name ?? string.Empty).ToLowerInvariant(), string.Empty);
+
+    /// <summary>Matches a software name to the hunt library, exactly then by substring.</summary>
+    private static ToolInfo? LookupTool(string? name)
+    {
+        string key = NormName(name);
+        if (key.Length == 0) { return null; }
+        if (Tools.TryGetValue(key, out ToolInfo? exact)) { return exact; }
+
+        foreach ((string k, ToolInfo v) in Tools)
+        {
+            if (k.Length >= 5 && key.Contains(k, StringComparison.Ordinal)) { return v; }
+        }
+
+        return null;
+    }
+
+    /// <summary>Product context for CVEs common in #StopRansomware advisories.</summary>
+    private static readonly Dictionary<string, (string Product, string Issue)> CveContext = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["CVE-2024-40766"] = ("SonicWall SonicOS (SSLVPN / management)", "Improper access control"),
+        ["CVE-2020-3259"]  = ("Cisco ASA / FTD (web services)", "Information disclosure"),
+        ["CVE-2023-20269"] = ("Cisco ASA / FTD (remote-access VPN)", "Brute force / unauthorized VPN access"),
+        ["CVE-2024-40711"] = ("Veeam Backup & Replication", "Deserialization RCE"),
+        ["CVE-2023-27532"] = ("Veeam Backup & Replication", "Credential exposure (TCP 9401)"),
+        ["CVE-2023-48788"] = ("Fortinet FortiClient EMS", "SQL injection RCE"),
+        ["CVE-2025-10035"] = ("Fortra GoAnywhere MFT", "License servlet deserialization"),
+        ["CVE-2024-1709"]  = ("ConnectWise ScreenConnect", "Authentication bypass"),
+        ["CVE-2024-55591"] = ("Fortinet FortiOS / FortiProxy", "Authentication bypass (Node.js websocket)"),
+        ["CVE-2025-24472"] = ("Fortinet FortiOS / FortiProxy", "Authentication bypass (CSF proxy)"),
+    };
+
+    /// <summary>
+    /// Ranges that belong to shared providers. An address here is a genuine
+    /// IOC that will also match ordinary traffic, so it is flagged, not cut.
+    /// </summary>
+    private static readonly (string Cidr, string Owner)[] SharedInfrastructure =
+    {
+        ("140.82.112.0/20", "GitHub"),
+        ("185.199.108.0/22", "GitHub (githubusercontent / Pages)"),
+        ("192.30.252.0/22", "GitHub"),
+        ("104.16.0.0/13", "Cloudflare"),
+        ("104.24.0.0/14", "Cloudflare"),
+        ("172.64.0.0/13", "Cloudflare"),
+        ("162.158.0.0/15", "Cloudflare"),
+        ("173.194.0.0/16", "Google"),
+        ("142.250.0.0/15", "Google"),
+        ("172.217.0.0/16", "Google"),
+        ("8.8.8.0/24", "Google DNS"),
+        ("1.1.1.0/24", "Cloudflare DNS"),
+    };
+
+    // ====================================================================
+    // address handling
+    // ====================================================================
+
+    /// <summary>A parsed address or CIDR block.</summary>
+    private readonly record struct Net(IPAddress Address, int Prefix)
+    {
+        public bool IsV4 => Address.AddressFamily == AddressFamily.InterNetwork;
+    }
+
+    private static Net? ParseNet(string value)
+    {
+        string s = value.Trim();
+        int slash = s.IndexOf('/');
+        string host = slash >= 0 ? s[..slash] : s;
+
+        if (!IPAddress.TryParse(host, out IPAddress? addr)) { return null; }
+
+        int max = addr.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
+        int prefix = max;
+
+        if (slash >= 0 &&
+            (!int.TryParse(s[(slash + 1)..], NumberStyles.Integer,
+                           CultureInfo.InvariantCulture, out prefix)
+             || prefix < 0 || prefix > max))
+        {
+            return null;
+        }
+
+        return new Net(addr, prefix);
+    }
+
+    private static bool InRange(IPAddress addr, string cidr)
+    {
+        Net? net = ParseNet(cidr);
+        if (net is null || net.Value.Address.AddressFamily != addr.AddressFamily)
+        {
+            return false;
+        }
+
+        byte[] a = addr.GetAddressBytes();
+        byte[] b = net.Value.Address.GetAddressBytes();
+        int bits = net.Value.Prefix;
+
+        for (int i = 0; i < a.Length && bits > 0; i++, bits -= 8)
+        {
+            int mask = bits >= 8 ? 0xFF : (0xFF << (8 - bits)) & 0xFF;
+            if ((a[i] & mask) != (b[i] & mask)) { return false; }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Ranges that are not a routable host on the internet, with the reason
+    /// worth telling an analyst. Multicast and carrier-grade NAT are listed
+    /// separately from private space, because calling a 224.x address
+    /// "victim-internal" would be wrong and send someone hunting the wrong way.
+    /// </summary>
+    private static readonly (string Cidr, string Why)[] NonRoutable =
+    {
+        // IPv4 private
+        ("10.0.0.0/8", "Private address, likely victim-internal"),
+        ("172.16.0.0/12", "Private address, likely victim-internal"),
+        ("192.168.0.0/16", "Private address, likely victim-internal"),
+        ("127.0.0.0/8", "Loopback address, not a real destination"),
+        ("169.254.0.0/16", "Link-local address, not routable"),
+        ("100.64.0.0/10", "Carrier-grade NAT range, not a unique host"),
+        ("224.0.0.0/4", "Multicast address, not a unicast destination"),
+
+        // IPv4 reserved and documentation
+        ("0.0.0.0/8", "Reserved range, not a real destination"),
+        ("192.0.0.0/24", "Reserved range, not a real destination"),
+        ("192.0.2.0/24", "Documentation range (RFC 5737), not a real host"),
+        ("198.18.0.0/15", "Benchmarking range, not a real host"),
+        ("198.51.100.0/24", "Documentation range (RFC 5737), not a real host"),
+        ("203.0.113.0/24", "Documentation range (RFC 5737), not a real host"),
+        ("240.0.0.0/4", "Reserved range, not a real destination"),
+
+        // IPv6 carve-outs inside global unicast. Everything outside 2000::/3
+        // is handled by the global-unicast test below, which is the only way
+        // to stay correct as IANA keeps assigning ranges.
+        ("2001:db8::/32", "Documentation range (RFC 3849), not a real host"),
+        ("3fff::/20", "Documentation range (RFC 9637), not a real host"),
+        ("2002::/16", "6to4 transition range, not a directly reachable host"),
+        ("2001::/32", "Teredo tunnelling range, not a directly reachable host"),
+    };
+
+    /// <summary>
+    /// The only IPv6 block IANA has assigned as global unicast. An address
+    /// outside it is loopback, link-local, unique-local, multicast or simply
+    /// unallocated, and in every case is not an internet destination.
+    /// </summary>
+    private const string GlobalUnicastV6 = "2000::/3";
+
+    /// <summary>Why an IPv6 address outside global unicast is not reachable.</summary>
+    private static string NonGlobalV6Reason(IPAddress addr)
+    {
+        if (InRange(addr, "::1/128")) { return "Loopback address, not a real destination"; }
+        if (InRange(addr, "::/128")) { return "Unspecified address, not a real destination"; }
+        if (InRange(addr, "::ffff:0:0/96")) { return "IPv4-mapped address, check it as IPv4 instead"; }
+        if (InRange(addr, "64:ff9b::/96")) { return "NAT64 translation range, not a real host"; }
+        if (InRange(addr, "100::/64")) { return "Discard-only range, not a real destination"; }
+        if (InRange(addr, "fe80::/10")) { return "Link-local address, not routable"; }
+        if (InRange(addr, "fc00::/7")) { return "Unique local address, likely victim-internal"; }
+        if (InRange(addr, "ff00::/8")) { return "Multicast address, not a unicast destination"; }
+
+        return "Outside assigned global unicast space, not an internet destination";
+    }
+
+    /// <summary>
+    /// Why an address deserves a caveat, or null when it is an ordinary IOC.
+    /// Nothing here drops an indicator: a flagged address is still reported.
+    /// </summary>
+    private static string? AddressNote(string value)
+    {
+        Net? parsed = ParseNet(value);
+        if (parsed is null) { return null; }
+
+        IPAddress addr = parsed.Value.Address;
+
+        if (!parsed.Value.IsV4 && !InRange(addr, GlobalUnicastV6))
+        {
+            return NonGlobalV6Reason(addr);
+        }
+
+        foreach ((string cidr, string why) in NonRoutable)
+        {
+            if (InRange(addr, cidr)) { return why; }
+        }
+
+        if (parsed.Value.IsV4)
+        {
+            foreach ((string cidr, string owner) in SharedInfrastructure)
+            {
+                if (InRange(addr, cidr))
+                {
+                    return $"Shared infrastructure ({owner}), expect benign hits";
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static void AddAddress(IocStore store, string? value, string source,
+                                   string? context = null)
+    {
+        if (string.IsNullOrWhiteSpace(value)) { return; }
+
+        Net? parsed = ParseNet(value);
+        if (parsed is null)
+        {
+            store.Add("other", value, source, "Unparseable IP");
+            return;
+        }
+
+        string? note = AddressNote(value);
+        IocItem? item = store.Add(parsed.Value.IsV4 ? "ipv4" : "ipv6", value, source,
+                                  note ?? context);
+
+        if (item is not null && note is not null) { item.Flagged = true; }
+    }
+
+    private static void AddDomain(IocStore store, string? value, string source,
+                                  string? context = null)
+    {
+        if (string.IsNullOrWhiteSpace(value)) { return; }
+
+        string v = value.ToLowerInvariant().TrimEnd('.');
+        string? ctx = v.EndsWith(".onion", StringComparison.Ordinal)
+            ? "Tor hidden service, only visible in proxy or DNS logs"
+            : context;
+
+        store.Add("domain", v, source, ctx);
+    }
+
+    private static void AddCve(IocStore store, string cve, string source)
+    {
+        string id = cve.ToUpperInvariant();
+        string ctx = CveContext.TryGetValue(id, out var info)
+            ? $"{info.Product}: {info.Issue}"
+            : "See NVD for the affected product";
+
+        IocItem? item = store.Add("cve", id, source, ctx);
+        if (item is null) { return; }
+
+        item.Nvd = "https://nvd.nist.gov/vuln/detail/" + id;
+        item.Kev = "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=" + id;
+    }
+
+    private static void AddSoftware(IocStore store, string? name, string source,
+                                    string stixType, IEnumerable<string>? malwareTypes,
+                                    IEnumerable<string>? aliases)
+    {
+        if (string.IsNullOrWhiteSpace(name) || SkipNames.Contains(name.Trim())) { return; }
+
+        string clean = name.Trim();
+        var types = (malwareTypes ?? Enumerable.Empty<string>())
+            .Select(t => t.ToLowerInvariant()).ToList();
+
+        ToolInfo? tool = LookupTool(clean);
+
+        if (tool is not null && !types.Contains("ransomware"))
+        {
+            string procs = tool.Processes.Length > 0
+                ? string.Join(", ", tool.Processes)
+                : "keyword hunt";
+
+            IocItem? item = store.Add("tool", clean, source, $"{tool.Kind} ({procs})");
+            if (item is not null) { item.Flagged = tool.Noisy; }
+        }
+        else if (stixType == "tool")
+        {
+            IocItem? item = store.Add("tool", clean, source,
+                "Tool named in the advisory, process name unverified");
+            if (item is not null) { item.Guess = true; }
+        }
+        else
+        {
+            string ctx = types.Count > 0
+                ? string.Join(", ", types)
+                : "Malware family named in the advisory";
+
+            store.Add("malware", clean, source, ctx, aliases);
+        }
+    }
+
+    private static string MitreUrl(string techniqueId) =>
+        "https://attack.mitre.org/techniques/"
+        + techniqueId.ToUpperInvariant().Replace(".", "/") + "/";
+
+    // ====================================================================
+    // text sweep
+    // ====================================================================
+
+    /// <summary>Undoes the defanging an advisory applies to live indicators.</summary>
+    private static string Refang(string text) => text
+        .Replace("hxxps", "https", StringComparison.OrdinalIgnoreCase)
+        .Replace("hxxp", "http", StringComparison.OrdinalIgnoreCase)
+        .Replace("[.]", ".", StringComparison.Ordinal)
+        .Replace("(.)", ".", StringComparison.Ordinal)
+        .Replace("[dot]", ".", StringComparison.OrdinalIgnoreCase)
+        .Replace("[:]", ":", StringComparison.Ordinal)
+        .Replace("[@]", "@", StringComparison.Ordinal)
+        .Replace("[at]", "@", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Regex extraction from free text. Deep also pulls domains, URLs,
+    /// techniques and file names, which are too noisy for a description field
+    /// but are the whole point when the file is a plain IOC list.
+    /// </summary>
+    private static void TextSweep(IocStore store, string? text, string source, bool deep = false)
+    {
+        if (string.IsNullOrEmpty(text)) { return; }
+
+        string body = Refang(text);
+
+        foreach (Match m in Ipv4Re.Matches(body))
+        {
+            if (ParseNet(m.Value) is null) { continue; }
+            if (store.Has("ipv4", m.Value) || store.Has("ipv6", m.Value)) { continue; }
+            AddAddress(store, m.Value, source, deep ? null : "From description text");
+        }
+
+        foreach (Match m in HexRe.Matches(body))
+        {
+            string cat = m.Value.Length switch
+            {
+                32 => "md5",
+                40 => "sha1",
+                64 => "sha256",
+                _ => "sha512",
+            };
+
+            bool known = deep || store.Has(cat, m.Value);
+            store.Add(cat, m.Value, source, known ? null : "From description text");
+        }
+
+        foreach (Match m in CveRe.Matches(body)) { AddCve(store, m.Value, source); }
+        foreach (Match m in EmailRe.Matches(body)) { store.Add("email", m.Value, source); }
+
+        if (!deep) { return; }
+
+        foreach (Match m in TechIdRe.Matches(body))
+        {
+            IocItem? item = store.Add("technique", m.Value.ToUpperInvariant(), source);
+            if (item is not null) { item.Mitre = MitreUrl(m.Value); }
+        }
+
+        foreach (Match m in UrlRe.Matches(body))
+        {
+            store.Add("url", m.Value.TrimEnd('.', ',', ';'), source);
+        }
+
+        var emails = EmailRe.Matches(body)
+            .Select(m => m.Value.ToLowerInvariant())
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (Match m in DomainRe.Matches(body))
+        {
+            string d = m.Value.ToLowerInvariant();
+            string tld = d[(d.LastIndexOf('.') + 1)..];
+
+            if (FileExtensions.Contains(tld)) { continue; }
+            if (NumericOnlyRe.IsMatch(d)) { continue; }
+            if (emails.Any(e => e.Contains(d, StringComparison.Ordinal))) { continue; }
+
+            AddDomain(store, d, source);
+        }
+
+        foreach (Match m in FileNameRe.Matches(body))
+        {
+            store.Add("filename", m.Value.Trim(), source);
+        }
+    }
+
+    // ====================================================================
+    // STIX parsing
+    // ====================================================================
+
+    private static string? Str(JsonElement obj, string property) =>
+        obj.ValueKind == JsonValueKind.Object
+        && obj.TryGetProperty(property, out JsonElement v)
+        && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
+
+    private static List<string> StrList(JsonElement obj, string property)
+    {
+        var list = new List<string>();
+
+        if (obj.ValueKind == JsonValueKind.Object
+            && obj.TryGetProperty(property, out JsonElement arr)
+            && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement e in arr.EnumerateArray())
+            {
+                if (e.ValueKind == JsonValueKind.String)
+                {
+                    string? s = e.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) { list.Add(s); }
+                }
+            }
+        }
+
+        return list;
+    }
+
+    /// <summary>Maps a hash path such as hashes.'SHA-256' to a category key.</summary>
+    private static string? HashCategory(string path)
+    {
+        Match m = HashPathRe.Match(path);
+        if (!m.Success) { return null; }
+
+        string key = m.Groups[1].Value.ToLowerInvariant().Replace("-", string.Empty);
+        return HashTypes.TryGetValue(key, out string? cat) ? cat : null;
+    }
+
+    /// <summary>Decides which category one STIX comparison belongs to.</summary>
+    private static string ClassifyComparison(string objType, string path)
+    {
+        string t = objType.ToLowerInvariant();
+        string p = path.ToLowerInvariant();
+
+        switch (t)
+        {
+            case "ipv4-addr": return "ipv4";
+            case "ipv6-addr": return "ipv6";
+            case "domain-name": return "domain";
+            case "url": return "url";
+            case "email-addr": return "email";
+            case "email-message" when p.Contains("value", StringComparison.Ordinal):
+                return "email";
+            case "windows-registry-key": return "registry";
+            case "mutex": return "mutex";
+        }
+
+        if (t is "file" or "artifact")
+        {
+            if (p.StartsWith("hashes", StringComparison.Ordinal))
+            {
+                return HashCategory(path) ?? "other";
+            }
+
+            if (p == "name") { return "filename"; }
+            if (p == "parent_directory_ref.path") { return "other"; }
+        }
+
+        if (t == "process")
+        {
+            if (p is "name" or "image_ref.name" or "binary_ref.name") { return "filename"; }
+            if (p.Contains("command_line", StringComparison.Ordinal)) { return "commandline"; }
+        }
+
+        return "other";
+    }
+
+    private readonly record struct Comparison(
+        string Category, string Value, string ObjType, string Path);
+
+    private static List<Comparison> ParsePattern(string? pattern)
+    {
+        var found = new List<Comparison>();
+        if (string.IsNullOrEmpty(pattern)) { return found; }
+
+        foreach (Match m in PatternRe.Matches(pattern))
+        {
+            string objType = m.Groups[1].Value;
+            string path = m.Groups[2].Value;
+            string value = m.Groups[3].Value
+                .Replace("\\'", "'", StringComparison.Ordinal)
+                .Replace("\\\\", "\\", StringComparison.Ordinal)
+                .Trim();
+
+            found.Add(new Comparison(ClassifyComparison(objType, path), value, objType, path));
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Works out how to label this advisory: the AA number when there is one,
+    /// otherwise the report title, otherwise the file name.
+    /// </summary>
+    private static (string Short, string Full, string Published) ReportLabel(
+        List<JsonElement> objects, string fileName)
+    {
+        string? advisoryId = null;
+        Match m = AdvisoryIdRe.Match(fileName);
+        if (m.Success) { advisoryId = m.Value.ToUpperInvariant(); }
+
+        JsonElement? report = objects.FirstOrDefault(o => Str(o, "type") == "report");
+        string? title = report is null ? null : Str(report.Value, "name");
+
+        if (advisoryId is null && title is not null)
+        {
+            Match t = AdvisoryIdRe.Match(title);
+            if (t.Success) { advisoryId = t.Value.ToUpperInvariant(); }
+        }
+
+        int dot = fileName.LastIndexOf('.');
+        string stem = dot > 0 ? fileName[..dot] : fileName;
+        string cleanTitle = StopRansomwareRe.Replace(title ?? string.Empty, string.Empty).Trim();
+
+        string shortName;
+        if (advisoryId is not null)
+        {
+            shortName = advisoryId;
+        }
+        else if (cleanTitle.Length > 0 && PastedNameRe.IsMatch(stem))
+        {
+            shortName = Clip(cleanTitle, 40);
+        }
+        else
+        {
+            shortName = Clip(stem, 40);
+        }
+
+        string full = title ?? fileName;
+        if (advisoryId is not null
+            && !full.Contains(advisoryId, StringComparison.OrdinalIgnoreCase))
+        {
+            full = $"{advisoryId} {full}";
+        }
+
+        string published = string.Empty;
+        if (report is not null)
+        {
+            string? pub = Str(report.Value, "published");
+            if (!string.IsNullOrEmpty(pub)) { published = Clip(pub, 10); }
+        }
+
+        return (shortName, full, published);
+    }
+
+    private static ReportInfo ParseStix(JsonElement root, string fileName, IocStore store)
+    {
+        var objects = new List<JsonElement>();
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            objects.AddRange(root.EnumerateArray());
+        }
+        else if (root.TryGetProperty("objects", out JsonElement arr)
+                 && arr.ValueKind == JsonValueKind.Array)
+        {
+            objects.AddRange(arr.EnumerateArray());
+        }
+        else
+        {
+            objects.Add(root);
+        }
+
+        (string source, string title, string published) = ReportLabel(objects, fileName);
+        int indicators = 0;
+
+        foreach (JsonElement o in objects)
+        {
+            if (o.ValueKind != JsonValueKind.Object) { continue; }
+
+            string type = (Str(o, "type") ?? string.Empty).ToLowerInvariant();
+            string description = Str(o, "description") ?? string.Empty;
+
+            switch (type)
+            {
+                case "indicator":
+                    indicators++;
+                    ParseIndicator(o, description, source, store);
+                    break;
+
+                case "vulnerability":
+                    foreach (Match c in CveRe.Matches(Str(o, "name") ?? string.Empty))
+                    {
+                        AddCve(store, c.Value, source);
+                    }
+
+                    foreach (JsonElement reference in ExternalReferences(o))
+                    {
+                        if (string.Equals(Str(reference, "source_name"), "cve",
+                                          StringComparison.OrdinalIgnoreCase))
+                        {
+                            string? id = Str(reference, "external_id");
+                            if (!string.IsNullOrEmpty(id)) { AddCve(store, id, source); }
+                        }
+                    }
+
+                    break;
+
+                case "malware":
+                case "tool":
+                    List<string> types = StrList(o, "malware_types");
+                    if (types.Count == 0) { types = StrList(o, "tool_types"); }
+                    AddSoftware(store, Str(o, "name"), source, type, types, StrList(o, "aliases"));
+                    break;
+
+                case "threat-actor":
+                case "intrusion-set":
+                case "campaign":
+                    string? actor = Str(o, "name");
+                    if (!string.IsNullOrWhiteSpace(actor) && !SkipNames.Contains(actor))
+                    {
+                        store.Add("actor", actor, source,
+                                  CultureInfo.InvariantCulture.TextInfo
+                                      .ToTitleCase(type.Replace("-", " ")),
+                                  StrList(o, "aliases"));
+                    }
+
+                    break;
+
+                case "attack-pattern":
+                    ParseAttackPattern(o, source, store);
+                    break;
+
+                case "ipv4-addr":
+                case "ipv6-addr":
+                    AddAddress(store, Str(o, "value"), source);
+                    break;
+
+                case "domain-name":
+                    AddDomain(store, Str(o, "value"), source);
+                    break;
+
+                case "url":
+                    store.Add("url", Str(o, "value"), source);
+                    break;
+
+                case "email-addr":
+                    store.Add("email", Str(o, "value"), source);
+                    break;
+
+                case "file":
+                    ParseFileObject(o, source, store);
+                    break;
+
+                case "windows-registry-key":
+                    store.Add("registry", Str(o, "key"), source);
+                    break;
+
+                case "mutex":
+                    store.Add("mutex", Str(o, "name"), source);
+                    break;
+
+                case "report":
+                case "note":
+                case "observed-data":
+                case "opinion":
+                    TextSweep(store, description.Length > 0 ? description : Str(o, "content"),
+                              source);
+                    break;
+            }
+        }
+
+        return new ReportInfo
+        {
+            Source = source,
+            Title = title,
+            Published = published,
+            File = fileName,
+            Indicators = indicators,
+            Objects = objects.Count,
+            Note = string.Empty,
+        };
+    }
+
+    private static IEnumerable<JsonElement> ExternalReferences(JsonElement obj) =>
+        obj.TryGetProperty("external_references", out JsonElement refs)
+        && refs.ValueKind == JsonValueKind.Array
+            ? refs.EnumerateArray()
+            : Enumerable.Empty<JsonElement>();
+
+    private static void ParseIndicator(JsonElement o, string description, string source,
+                                       IocStore store)
+    {
+        List<Comparison> comps = ParsePattern(Str(o, "pattern"));
+
+        List<string> names = comps.Where(c => c.Category == "filename")
+                                  .Select(c => c.Value).ToList();
+        List<string> hashes = comps.Where(c => HashTypes.ContainsKey(c.Category))
+                                   .Select(c => c.Value.ToLowerInvariant()).ToList();
+
+        string? context = null;
+        string trimmed = description.Trim();
+
+        if (trimmed.Length > 0 && trimmed.Length < 200 && !Ipv4Re.IsMatch(trimmed))
+        {
+            context = trimmed;
+        }
+
+        string? name = Str(o, "name");
+        if (context is null && name is not null && name.Length < 200) { context = name; }
+
+        foreach (Comparison c in comps)
+        {
+            switch (c.Category)
+            {
+                case "ipv4":
+                case "ipv6":
+                    AddAddress(store, c.Value, source, context);
+                    break;
+
+                case "domain":
+                    AddDomain(store, c.Value, source, context);
+                    break;
+
+                case "filename":
+                    store.Add(c.Category, c.Value, source,
+                              context ?? (hashes.Count > 0 ? "Has a hash IOC" : null), hashes);
+                    break;
+
+                case "other":
+                    IocItem? other = store.Add("other", $"{c.ObjType}:{c.Path} = {c.Value}",
+                                               source, context);
+                    if (other is not null) { other.Raw = c.Value; }
+                    break;
+
+                default:
+                    if (HashTypes.ContainsKey(c.Category))
+                    {
+                        string? ctx = context;
+                        if (names.Count > 0)
+                        {
+                            ctx = "File: " + string.Join(", ", names)
+                                + (context is not null ? $" ({context})" : string.Empty);
+                        }
+
+                        var related = hashes
+                            .Where(h => !string.Equals(h, c.Value, StringComparison.OrdinalIgnoreCase))
+                            .Concat(names).ToList();
+
+                        store.Add(c.Category, c.Value, source, ctx, related);
+                    }
+                    else
+                    {
+                        store.Add(c.Category, c.Value, source, context);
+                    }
+
+                    break;
+            }
+        }
+
+        if (comps.Count == 0)
+        {
+            string? pattern = Str(o, "pattern");
+            if (!string.IsNullOrEmpty(pattern)) { TextSweep(store, pattern, source, deep: true); }
+        }
+
+        // descriptions sometimes carry extra indicators, e.g. "SHA256 of <sha1>"
+        TextSweep(store, description, source);
+    }
+
+    private static void ParseAttackPattern(JsonElement o, string source, IocStore store)
+    {
+        string name = Str(o, "name") ?? string.Empty;
+        string? techniqueId = null;
+        string context = name;
+
+        Match m = TechNameRe.Match(name);
+        if (m.Success)
+        {
+            techniqueId = m.Groups["id"].Value;
+            context = $"{m.Groups["tactic"].Value.Trim()}: {m.Groups["name"].Value.Trim()}";
+        }
+        else
+        {
+            foreach (JsonElement reference in ExternalReferences(o))
+            {
+                string sourceName = Str(reference, "source_name") ?? string.Empty;
+                string? id = Str(reference, "external_id");
+
+                if (sourceName.StartsWith("mitre", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(id))
+                {
+                    techniqueId = id;
+                }
+            }
+
+            if (techniqueId is null)
+            {
+                Match fallback = TechIdRe.Match(name);
+                if (fallback.Success) { techniqueId = fallback.Value; }
+            }
+        }
+
+        if (techniqueId is null) { return; }
+
+        IocItem? item = store.Add("technique", techniqueId.ToUpperInvariant(), source, context);
+        if (item is not null) { item.Mitre = MitreUrl(techniqueId); }
+    }
+
+    private static void ParseFileObject(JsonElement o, string source, IocStore store)
+    {
+        string? fileName = Str(o, "name");
+        var values = new List<string>();
+
+        if (o.TryGetProperty("hashes", out JsonElement hashes)
+            && hashes.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty h in hashes.EnumerateObject())
+            {
+                if (h.Value.ValueKind != JsonValueKind.String) { continue; }
+
+                string? value = h.Value.GetString();
+                if (string.IsNullOrWhiteSpace(value)) { continue; }
+
+                values.Add(value.ToLowerInvariant());
+
+                string key = h.Name.ToLowerInvariant().Replace("-", string.Empty);
+                if (HashTypes.TryGetValue(key, out string? cat))
+                {
+                    store.Add(cat, value, source,
+                              fileName is not null ? $"File: {fileName}" : null,
+                              fileName is not null ? new[] { fileName } : null);
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            store.Add("filename", fileName, source, null, values);
+        }
+    }
+
+    // ====================================================================
+    // Splunk search building
+    // ====================================================================
+
+    private static string Quote(string value) =>
+        "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal)
+                    .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static List<string> Dedupe(IEnumerable<string> values)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var output = new List<string>();
+
+        foreach (string value in values)
+        {
+            string v = (value ?? string.Empty).Trim();
+            if (v.Length > 0 && seen.Add(v)) { output.Add(v); }
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// The values worth searching for a category, which are not always the
+    /// values shown. A tool is searched by its executable names, because
+    /// "AnyDesk" rarely appears in a process event but AnyDesk.exe does.
+    /// </summary>
+    private static List<string> SearchTerms(string key, List<IocItem> items)
+    {
+        switch (key)
+        {
+            case "tool":
+                var terms = new List<string>();
+                foreach (IocItem i in items)
+                {
+                    ToolInfo? tool = LookupTool(i.Value);
+                    if (tool is not null)
+                    {
+                        terms.AddRange(tool.Processes);
+                        terms.AddRange(tool.Keywords);
+                    }
+                    else
+                    {
+                        terms.Add(i.Value);
+                    }
+                }
+
+                return Dedupe(terms);
+
+            case "other":
+                return Dedupe(items.Select(i => i.Raw ?? i.Value));
+
+            case "malware":
+                return Dedupe(items.Select(i =>
+                    TrailingRansomwareRe.Replace(i.Value, string.Empty)));
+
+            default:
+                return Dedupe(items.Select(i => i.Value));
+        }
+    }
+
+    /// <summary>
+    /// Turns the store into the display list, one broad search per category.
+    ///
+    /// No time modifiers and no pipes: the analyst sets the range in the time
+    /// picker, and a bare search is the one form that pastes anywhere.
+    /// </summary>
+    private static List<IocCategory> BuildCategories(IocStore store, string? scope)
+    {
+        string searchScope = string.IsNullOrWhiteSpace(scope) ? "index=*" : scope.Trim();
+        if (searchScope.Length > 500) { searchScope = searchScope[..500]; }
+
+        var output = new List<IocCategory>();
+
+        foreach ((string key, string label, string group) in Categories)
+        {
+            List<IocItem> items = store.Items(key);
+            if (items.Count == 0) { continue; }
+
+            var category = new IocCategory
+            {
+                Key = key,
+                Label = label,
+                Group = group,
+                Items = items,
+            };
+
+            if (!NoSearch.Contains(key))
+            {
+                List<string> terms = SearchTerms(key, items);
+                if (terms.Count > 0)
+                {
+                    category.Spl = searchScope + " ("
+                        + string.Join(" OR ", terms.Select(Quote)) + ")";
+                }
+            }
+
+            if (key == "tool")
+            {
+                var noisy = items
+                    .Where(i => LookupTool(i.Value)?.Noisy == true)
+                    .Select(i => i.Value)
+                    .ToList();
+
+                if (noisy.Count > 0)
+                {
+                    category.Note = "Expect plenty of benign hits for "
+                        + string.Join(", ", noisy)
+                        + ": they are legitimate and present on most hosts.";
+                }
+            }
+
+            output.Add(category);
+        }
+
+        return output;
+    }
+}
