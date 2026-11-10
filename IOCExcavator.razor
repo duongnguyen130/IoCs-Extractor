@@ -238,7 +238,7 @@
                         <span class="ix-group-tag">@cat.Group</span>
 
                         <div class="ix-right">
-                            @if (cat.Spl is not null)
+                            @if (cat.Searchable)
                             {
                                 <label class="ix-combine" title="Add this category to the combined search">
                                     <input type="checkbox" checked="@combineKeys.Contains(cat.Key)"
@@ -273,10 +273,6 @@
                                             title="Click to copy this value"
                                             @onclick="() => CopyValueAsync(row.Value, cat.Key)">@row.Value</button>
 
-                                    @if (row.Context.Count > 0)
-                                    {
-                                        <span class="ix-ctx">@string.Join("; ", row.Context)</span>
-                                    }
                                     @if (row.Related.Count > 0)
                                     {
                                         <span class="ix-rel">&rarr; @string.Join(", ", row.Related)</span>
@@ -306,15 +302,25 @@
                             </div>
                         }
 
-                        @if (cat.Spl is not null)
+                        @for (int si = 0; si < cat.Searches.Count; si++)
                         {
+                            BuiltSearch search = cat.Searches[si];
+                            string searchKey = cat.Key + ":spl:" + si;
+
                             <details class="ix-spl">
-                                <summary>Splunk search &mdash; @cat.Spl.Length.ToString("N0") characters</summary>
+                                <summary>
+                                    @search.Name
+                                    <span class="ix-spl-count">@search.Terms terms</span>
+                                </summary>
                                 <div class="ix-spl-inner">
-                                    <pre>@cat.Spl</pre>
+                                    @if (search.Note is not null)
+                                    {
+                                        <p class="ix-spl-note">@search.Note</p>
+                                    }
+                                    <pre>@search.Spl</pre>
                                     <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
-                                            @onclick="() => CopySplAsync(cat)">
-                                        @(copiedKey == cat.Key + ":spl" ? "Copied" : "Copy SPL")
+                                            @onclick="() => CopySearchAsync(search, searchKey)">
+                                        @(copiedKey == searchKey ? "Copied" : "Copy SPL")
                                     </button>
                                 </div>
                             </details>
@@ -329,6 +335,8 @@
                     <strong>Nothing in this group</strong><span>Try another filter.</span>
                 </div>
             }
+
+            <p class="ix-srcline">@SearchSourceLine()</p>
 
         </section>
     }
@@ -346,6 +354,10 @@
 
 @code{
     [Inject] private IJSRuntime _jsRuntime { get; set; } = default!;
+
+    /// <summary>Needed only to find IOCExcavator.searches.json under the content root.</summary>
+    [Inject] private Microsoft.AspNetCore.Hosting.IWebHostEnvironment _env { get; set; } = default!;
+
     private IJSObjectReference jsModule { get; set; } = null!;
 
     /*
@@ -398,6 +410,9 @@
 
     /// <summary>The scope the last run used, so the combined search matches the per-category ones.</summary>
     private string resolvedScope = "index=*";
+
+    /// <summary>The search definitions the last run used, from the JSON file or the built-ins.</summary>
+    private SearchBook searchBook = BuiltInBook();
 
     private string? errorMessage;
     private bool isBusy;
@@ -468,7 +483,7 @@
 
     /// <summary>Categories currently ticked, in display order. Only ones that have a search qualify.</summary>
     private List<IocCategory> CombineSelection() =>
-        categories.Where(c => c.Spl is not null && combineKeys.Contains(c.Key)).ToList();
+        categories.Where(c => c.Searchable && combineKeys.Contains(c.Key)).ToList();
 
     private void ToggleCombine(string key)
     {
@@ -509,9 +524,20 @@
         List<string> merged = Dedupe(pooled);
         if (merged.Count == 0) { return; }
 
+        SearchDef def = searchBook.Combined;
+        if (def.MaxTerms > 0 && merged.Count > def.MaxTerms)
+        {
+            merged = merged.Take(def.MaxTerms).ToList();
+        }
+
+        string joined = string.Join(
+            def.Separator,
+            merged.Select(t => def.Item.Replace("{value}", Quote(t), StringComparison.Ordinal)));
+
         combinedTerms = merged.Count;
-        combinedSpl = resolvedScope + " ("
-            + string.Join(" OR ", merged.Select(Quote)) + ")";
+        combinedSpl = def.Template
+            .Replace("{scope}", def.Scope ?? resolvedScope, StringComparison.Ordinal)
+            .Replace("{terms}", joined, StringComparison.Ordinal);
     }
 
     private async Task CopyCombinedAsync()
@@ -704,6 +730,20 @@
             var runReports = new List<ReportInfo>();
             var runErrors = new List<string>();
 
+            // Both files load before anything is parsed. The library decides
+            // what the parser recognises as a tool or a shared range, so it
+            // has to be in place before the first file goes through it.
+            HuntLibrary lib = LoadLibrary(_env.ContentRootPath);
+            if (lib.Problem is not null) { runErrors.Add(lib.Problem); }
+
+            searchBook = LoadSearchBook(_env.ContentRootPath);
+            if (searchBook.Problem is not null) { runErrors.Add(searchBook.Problem); }
+            if (searchBook.UnknownKeys.Count > 0)
+            {
+                runErrors.Add(SearchFileName + " names categories that do not exist: "
+                    + string.Join(", ", searchBook.UnknownKeys) + ". Those entries were ignored.");
+            }
+
             foreach (QueuedFile file in queued)
             {
                 try
@@ -720,8 +760,8 @@
                 }
             }
 
-            resolvedScope = ResolveScope(splunkScope);
-            categories = BuildCategories(store, resolvedScope);
+            resolvedScope = ResolveScope(splunkScope, searchBook.DefaultScope);
+            categories = BuildCategories(store, resolvedScope, searchBook);
             reports = runReports;
             errors = runErrors;
             totalItems = categories.Sum(c => c.Items.Count);
@@ -826,12 +866,28 @@
         }
     }
 
-    private async Task CopySplAsync(IocCategory cat)
+    private async Task CopySearchAsync(BuiltSearch search, string key)
     {
-        if (cat.Spl is not null && await CopyAsync(cat.Spl))
-        {
-            copiedKey = cat.Key + ":spl";
-        }
+        if (await CopyAsync(search.Spl)) { copiedKey = key; }
+    }
+
+    /// <summary>
+    /// Says where the searches came from. One quiet line, but it is the
+    /// difference between knowing a deployment picked up an edit and guessing.
+    /// </summary>
+    private string SearchSourceLine()
+    {
+        string searches = searchBook.FromFile
+            ? $"{SearchFileName}: {searchBook.Customised} "
+              + $"categor{(searchBook.Customised == 1 ? "y" : "ies")}"
+            : $"{SearchFileName}: not found, using built-ins";
+
+        string lib = library.FromFile
+            ? $"{LibraryFileName}: {library.Tools.Count} tools, "
+              + $"{library.Cves.Count} CVEs, {library.SharedRanges.Count} ranges"
+            : $"{LibraryFileName}: not found, using built-ins";
+
+        return searches + "  |  " + lib;
     }
 
     private async Task CopyAllAsync()
@@ -910,12 +966,18 @@
 
         if (kind == "spl")
         {
-            foreach (IocCategory c in categories.Where(c => c.Spl is not null))
+            foreach (IocCategory c in categories.Where(c => c.Searchable))
             {
                 sb.AppendLine($"### {c.Label} ({c.Items.Count})");
                 if (c.Note is not null) { sb.AppendLine($"# {c.Note}"); }
-                sb.AppendLine(c.Spl);
-                sb.AppendLine();
+
+                foreach (BuiltSearch s in c.Searches)
+                {
+                    sb.AppendLine($"# {s.Name} -- {s.Terms} term{(s.Terms == 1 ? "" : "s")}");
+                    if (s.Note is not null) { sb.AppendLine($"# {s.Note}"); }
+                    sb.AppendLine(s.Spl);
+                    sb.AppendLine();
+                }
             }
 
             if (combinedSpl is not null)
@@ -1049,8 +1111,20 @@
         public string Label { get; init; } = string.Empty;
         public string Group { get; init; } = string.Empty;
         public List<IocItem> Items { get; init; } = new();
-        public string? Spl { get; set; }
+        public List<BuiltSearch> Searches { get; } = new();
         public string? Note { get; set; }
+
+        /// <summary>Whether this category can take part in a combined search.</summary>
+        public bool Searchable => Searches.Count > 0;
+    }
+
+    /// <summary>One search definition rendered against one category's indicators.</summary>
+    private sealed class BuiltSearch
+    {
+        public string Name { get; init; } = string.Empty;
+        public string? Note { get; init; }
+        public string Spl { get; init; } = string.Empty;
+        public int Terms { get; init; }
     }
 
     private sealed class ReportInfo
@@ -1288,7 +1362,7 @@
     private sealed record ToolInfo(
         string Label, string Kind, string[] Processes, string[] Keywords, bool Noisy);
 
-    private static readonly Dictionary<string, ToolInfo> Tools = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, ToolInfo> BuiltInTools = new(StringComparer.Ordinal)
     {
         ["anydesk"] = new("AnyDesk", "Remote access (RMM)",
             new[] { "AnyDesk.exe" }, new[] { "anydesk.com" }, false),
@@ -1374,11 +1448,13 @@
     /// <summary>Matches a software name to the hunt library, exactly then by substring.</summary>
     private static ToolInfo? LookupTool(string? name)
     {
+        Dictionary<string, ToolInfo> tools = library.Tools;
+
         string key = NormName(name);
         if (key.Length == 0) { return null; }
-        if (Tools.TryGetValue(key, out ToolInfo? exact)) { return exact; }
+        if (tools.TryGetValue(key, out ToolInfo? exact)) { return exact; }
 
-        foreach ((string k, ToolInfo v) in Tools)
+        foreach ((string k, ToolInfo v) in tools)
         {
             if (k.Length >= 5 && key.Contains(k, StringComparison.Ordinal)) { return v; }
         }
@@ -1387,7 +1463,7 @@
     }
 
     /// <summary>Product context for CVEs common in #StopRansomware advisories.</summary>
-    private static readonly Dictionary<string, (string Product, string Issue)> CveContext = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, (string Product, string Issue)> BuiltInCves = new(StringComparer.OrdinalIgnoreCase)
     {
         ["CVE-2024-40766"] = ("SonicWall SonicOS (SSLVPN / management)", "Improper access control"),
         ["CVE-2020-3259"]  = ("Cisco ASA / FTD (web services)", "Information disclosure"),
@@ -1405,7 +1481,7 @@
     /// Ranges that belong to shared providers. An address here is a genuine
     /// IOC that will also match ordinary traffic, so it is flagged, not cut.
     /// </summary>
-    private static readonly (string Cidr, string Owner)[] SharedInfrastructure =
+    private static readonly (string Cidr, string Owner)[] BuiltInRanges =
     {
         ("140.82.112.0/20", "GitHub"),
         ("185.199.108.0/22", "GitHub (githubusercontent / Pages)"),
@@ -1553,7 +1629,7 @@
 
         if (parsed.Value.IsV4)
         {
-            foreach ((string cidr, string owner) in SharedInfrastructure)
+            foreach ((string cidr, string owner) in library.SharedRanges)
             {
                 if (InRange(addr, cidr))
                 {
@@ -1600,7 +1676,7 @@
     private static void AddCve(IocStore store, string cve, string source)
     {
         string id = cve.ToUpperInvariant();
-        string ctx = CveContext.TryGetValue(id, out var info)
+        string ctx = library.Cves.TryGetValue(id, out var info)
             ? $"{info.Product}: {info.Issue}"
             : "See NVD for the affected product";
 
@@ -2183,6 +2259,560 @@
     }
 
     // ====================================================================
+    // search definitions  --  IOCExcavator.searches.json
+    // ====================================================================
+
+    /// <summary>
+    /// Where the searches live, relative to the content root. The path is a
+    /// constant on purpose: nothing a user types ever reaches it, so there is
+    /// no traversal to defend against.
+    ///
+    /// It sits beside the page rather than in wwwroot, which means it is not
+    /// served over HTTP. An analyst can use the searches; only someone with
+    /// the source tree can read or change them.
+    /// </summary>
+    private const string SearchFileName = "IOCExcavator.searches.json";
+    private const string LibraryFileName = "IOCExcavator.library.json";
+
+    private const long MaxSearchFileBytes = 512L * 1024;
+    private const long MaxLibraryFileBytes = 2L * 1024 * 1024;
+    private const int MaxSearchesPerCategory = 12;
+    private const int MaxLibraryEntries = 2000;
+
+    /// <summary>One recommended search, as written in the JSON file.</summary>
+    private sealed class SearchDef
+    {
+        public string Name { get; set; } = "Broad search";
+        public string? Note { get; set; }
+        public string Template { get; set; } = "{scope} ({terms})";
+        public string Item { get; set; } = "{value}";
+        public string Separator { get; set; } = " OR ";
+        public string? Scope { get; set; }
+
+        /// <summary>"search" for the derived hunt terms, "values" for the literal list.</summary>
+        public string Source { get; set; } = "search";
+
+        /// <summary>"all", "clean" to drop the flagged noisy indicators, or "flagged".</summary>
+        public string Include { get; set; } = "all";
+
+        /// <summary>Cap on indicators in one search. Zero means no cap.</summary>
+        public int MaxTerms { get; set; }
+    }
+
+    /// <summary>Everything one load of the JSON file produced.</summary>
+    private sealed class SearchBook
+    {
+        public string DefaultScope { get; set; } = "index=*";
+        public SearchDef Combined { get; set; } = new() { Name = "Combined search" };
+        public Dictionary<string, List<SearchDef>> ByKey { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>True once the file has been read successfully.</summary>
+        public bool FromFile { get; set; }
+
+        /// <summary>Category count the file actually overrode, for the footer line.</summary>
+        public int Customised { get; set; }
+
+        /// <summary>Set only when the file exists but could not be used. Shown to the analyst.</summary>
+        public string? Problem { get; set; }
+
+        /// <summary>Keys in the file that are not real categories, almost always typos.</summary>
+        public List<string> UnknownKeys { get; } = new();
+    }
+
+    private static readonly HashSet<string> CategoryKeys =
+        new(Categories.Select(c => c.Key), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The behaviour before the file existed: one broad search per category.</summary>
+    private static SearchBook BuiltInBook()
+    {
+        var book = new SearchBook();
+        FillMissing(book);
+        return book;
+    }
+
+    private static void FillMissing(SearchBook book)
+    {
+        foreach ((string key, _, _) in Categories)
+        {
+            if (book.ByKey.ContainsKey(key)) { continue; }
+
+            book.ByKey[key] = NoSearch.Contains(key)
+                ? new List<SearchDef>()
+                : new List<SearchDef> { new SearchDef() };
+        }
+    }
+
+    private static readonly object fileCacheLock = new();
+    private static readonly Dictionary<string, (string Stamp, object Value)> fileCache =
+        new(StringComparer.Ordinal);
+
+    private static string PageFilePath(string contentRoot, string fileName) =>
+        System.IO.Path.Combine(contentRoot, "Components", "Pages", "IOCExcavator", fileName);
+
+    /// <summary>
+    /// A file's timestamp and length, which together are enough to notice an
+    /// edit. Cheaper than hashing and wrong only if a file is replaced with
+    /// one of the same length in the same tick.
+    /// </summary>
+    private static string FileStamp(string path)
+    {
+        try
+        {
+            var info = new System.IO.FileInfo(path);
+            return info.Exists
+                ? info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)
+                  + ":" + info.Length.ToString(CultureInfo.InvariantCulture)
+                : "missing";
+        }
+        catch (Exception)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> FileStamp() has caught an exception!");
+            return "unreadable";
+        }
+    }
+
+    /// <summary>
+    /// Reads a page file, re-parsing it only when its stamp has changed. The
+    /// cache is static and shared across circuits, so an edit is picked up on
+    /// the next Extract by every user without an app restart.
+    /// </summary>
+    private static T LoadCached<T>(string contentRoot, string fileName, Func<string, T> read)
+        where T : class
+    {
+        string path = PageFilePath(contentRoot, fileName);
+        string stamp = FileStamp(path);
+
+        lock (fileCacheLock)
+        {
+            if (fileCache.TryGetValue(fileName, out (string Stamp, object Value) hit)
+                && hit.Stamp == stamp
+                && hit.Value is T cached)
+            {
+                return cached;
+            }
+
+            T fresh = read(path);
+            fileCache[fileName] = (stamp, fresh);
+            return fresh;
+        }
+    }
+
+    private static SearchBook LoadSearchBook(string contentRoot) =>
+        LoadCached(contentRoot, SearchFileName, ReadSearchBook);
+
+    /// <summary>
+    /// Parses the file. Every failure path returns a usable book rather than
+    /// throwing: a mistyped search file leaves the page working on the
+    /// built-in searches with the reason on screen, which is the right
+    /// trade when someone is mid-incident.
+    /// </summary>
+    private static SearchBook ReadSearchBook(string path)
+    {
+        var book = new SearchBook();
+
+        try
+        {
+            var info = new System.IO.FileInfo(path);
+
+            if (!info.Exists)
+            {
+                FillMissing(book);
+                return book;
+            }
+
+            if (info.Length > MaxSearchFileBytes)
+            {
+                book.Problem = $"IOCExcavator.searches.json is over "
+                    + $"{MaxSearchFileBytes / 1024} KB and was not read. "
+                    + "The built-in searches are in use.";
+                FillMissing(book);
+                return book;
+            }
+
+            string text = System.IO.File.ReadAllText(path, Encoding.UTF8);
+            using JsonDocument doc = JsonDocument.Parse(text, JsonOptions);
+            JsonElement root = doc.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                book.Problem = "IOCExcavator.searches.json must hold a JSON object. "
+                    + "The built-in searches are in use.";
+                FillMissing(book);
+                return book;
+            }
+
+            string? scope = Str(root, "defaultScope");
+            if (!string.IsNullOrWhiteSpace(scope))
+            {
+                book.DefaultScope = Clip(scope.Trim(), 500);
+            }
+
+            if (root.TryGetProperty("combined", out JsonElement combined)
+                && combined.ValueKind == JsonValueKind.Object)
+            {
+                book.Combined = ReadSearchDef(combined, "Combined search");
+            }
+
+            if (root.TryGetProperty("searches", out JsonElement searches)
+                && searches.ValueKind == JsonValueKind.Object)
+            {
+                foreach (System.Text.Json.JsonProperty entry in searches.EnumerateObject())
+                {
+                    if (!CategoryKeys.Contains(entry.Name))
+                    {
+                        if (book.UnknownKeys.Count < 10)
+                        {
+                            book.UnknownKeys.Add(Clip(entry.Name, 40));
+                        }
+
+                        continue;
+                    }
+
+                    if (entry.Value.ValueKind != JsonValueKind.Array) { continue; }
+
+                    var defs = new List<SearchDef>();
+                    foreach (JsonElement item in entry.Value.EnumerateArray())
+                    {
+                        if (defs.Count >= MaxSearchesPerCategory) { break; }
+                        if (item.ValueKind != JsonValueKind.Object) { continue; }
+
+                        defs.Add(ReadSearchDef(item, "Search " + (defs.Count + 1)));
+                    }
+
+                    book.ByKey[entry.Name] = defs;
+                    book.Customised++;
+                }
+            }
+
+            book.FromFile = true;
+            FillMissing(book);
+            return book;
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            book.Problem = "IOCExcavator.searches.json is not valid JSON (" + ex.Message
+                + "). The built-in searches are in use.";
+        }
+        catch (Exception ex)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> ReadSearchBook() has caught an exception!");
+            book.Problem = "IOCExcavator.searches.json could not be read (" + ex.Message
+                + "). The built-in searches are in use.";
+        }
+
+        var fallback = new SearchBook { Problem = book.Problem };
+        FillMissing(fallback);
+        return fallback;
+    }
+
+    private static SearchDef ReadSearchDef(JsonElement element, string fallbackName)
+    {
+        var def = new SearchDef();
+
+        string? name = Str(element, "name");
+        def.Name = string.IsNullOrWhiteSpace(name) ? fallbackName : Clip(name.Trim(), 80);
+
+        string? note = Str(element, "note");
+        def.Note = string.IsNullOrWhiteSpace(note) ? null : Clip(note.Trim(), 300);
+
+        // A template with no {terms} would render as a bare scope, which in
+        // Splunk matches every event in the index. Refusing it is the whole
+        // reason this is validated rather than used as written.
+        string? template = Str(element, "template");
+        def.Template = template is not null && template.Contains("{terms}", StringComparison.Ordinal)
+            ? Clip(template, 1000)
+            : "{scope} ({terms})";
+
+        string? item = Str(element, "item");
+        def.Item = item is not null && item.Contains("{value}", StringComparison.Ordinal)
+            ? Clip(item, 200)
+            : "{value}";
+
+        if (element.TryGetProperty("separator", out JsonElement separator)
+            && separator.ValueKind == JsonValueKind.String)
+        {
+            def.Separator = Clip(separator.GetString() ?? " OR ", 20);
+        }
+
+        string? scope = Str(element, "scope");
+        def.Scope = string.IsNullOrWhiteSpace(scope) ? null : Clip(scope.Trim(), 500);
+
+        def.Source = string.Equals(Str(element, "source"), "values", StringComparison.OrdinalIgnoreCase)
+            ? "values"
+            : "search";
+
+        string include = (Str(element, "include") ?? string.Empty).Trim().ToLowerInvariant();
+        def.Include = include is "clean" or "flagged" ? include : "all";
+
+        if (element.TryGetProperty("maxTerms", out JsonElement maxTerms)
+            && maxTerms.ValueKind == JsonValueKind.Number
+            && maxTerms.TryGetInt32(out int cap)
+            && cap > 0)
+        {
+            def.MaxTerms = Math.Min(cap, MaxItemsPerCategory);
+        }
+
+        return def;
+    }
+
+    private static string Clip(string value, int max) =>
+        value.Length <= max ? value : value[..max];
+
+    // ====================================================================
+    // hunt library file  --  IOCExcavator.library.json
+    // ====================================================================
+
+    /// <summary>What the tool recognises: software, CVEs and shared ranges.</summary>
+    private sealed class HuntLibrary
+    {
+        public Dictionary<string, ToolInfo> Tools { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, (string Product, string Issue)> Cves { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+        public List<(string Cidr, string Owner)> SharedRanges { get; } = new();
+
+        public bool FromFile { get; set; }
+        public string? Problem { get; set; }
+        public int Added { get; set; }
+        public int Removed { get; set; }
+    }
+
+    /// <summary>
+    /// The library in force.
+    ///
+    /// Static because the parsing path is static and the value is global
+    /// rather than per-user: every circuit reads the same file, so there is
+    /// no per-request state being shared by accident. It is only ever
+    /// replaced wholesale, never mutated in place, so a reader part way
+    /// through an extraction always sees one complete library.
+    /// </summary>
+    private static HuntLibrary library = BuiltInLibrary();
+
+    private static HuntLibrary BuiltInLibrary()
+    {
+        var lib = new HuntLibrary();
+        SeedBuiltIns(lib);
+        return lib;
+    }
+
+    private static void SeedBuiltIns(HuntLibrary lib)
+    {
+        foreach (KeyValuePair<string, ToolInfo> pair in BuiltInTools)
+        {
+            lib.Tools[pair.Key] = pair.Value;
+        }
+
+        foreach (KeyValuePair<string, (string Product, string Issue)> pair in BuiltInCves)
+        {
+            lib.Cves[pair.Key] = pair.Value;
+        }
+
+        lib.SharedRanges.AddRange(BuiltInRanges);
+    }
+
+    private static HuntLibrary LoadLibrary(string contentRoot)
+    {
+        HuntLibrary loaded = LoadCached(contentRoot, LibraryFileName, ReadLibrary);
+        library = loaded;
+        return loaded;
+    }
+
+    /// <summary>
+    /// Parses the library file. Entries are merged over the built-ins by
+    /// default, because a short file should add to what the tool knows
+    /// rather than silently discard thirty-five tools. Set replaceBuiltIns
+    /// to start from nothing, or give one entry a null value to drop just
+    /// that built-in.
+    /// </summary>
+    private static HuntLibrary ReadLibrary(string path)
+    {
+        var lib = new HuntLibrary();
+
+        try
+        {
+            var info = new System.IO.FileInfo(path);
+            if (!info.Exists)
+            {
+                SeedBuiltIns(lib);
+                return lib;
+            }
+
+            if (info.Length > MaxLibraryFileBytes)
+            {
+                SeedBuiltIns(lib);
+                lib.Problem = $"{LibraryFileName} is over "
+                    + $"{MaxLibraryFileBytes / 1024 / 1024} MB and was not read. "
+                    + "The built-in library is in use.";
+                return lib;
+            }
+
+            string text = System.IO.File.ReadAllText(path, Encoding.UTF8);
+            using JsonDocument doc = JsonDocument.Parse(text, JsonOptions);
+            JsonElement root = doc.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                SeedBuiltIns(lib);
+                lib.Problem = $"{LibraryFileName} must hold a JSON object. "
+                    + "The built-in library is in use.";
+                return lib;
+            }
+
+            bool replace = root.TryGetProperty("replaceBuiltIns", out JsonElement rep)
+                && rep.ValueKind == JsonValueKind.True;
+
+            if (!replace) { SeedBuiltIns(lib); }
+
+            ReadTools(root, lib);
+            ReadCves(root, lib);
+            ReadRanges(root, lib);
+
+            lib.FromFile = true;
+            return lib;
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            lib = new HuntLibrary
+            {
+                Problem = $"{LibraryFileName} is not valid JSON (" + ex.Message
+                    + "). The built-in library is in use.",
+            };
+        }
+        catch (Exception ex)
+        {
+            //Log.Error(ex, "Uh oh! IOCExcavator.razor -> ReadLibrary() has caught an exception!");
+            lib = new HuntLibrary
+            {
+                Problem = $"{LibraryFileName} could not be read (" + ex.Message
+                    + "). The built-in library is in use.",
+            };
+        }
+
+        SeedBuiltIns(lib);
+        return lib;
+    }
+
+    private static void ReadTools(JsonElement root, HuntLibrary lib)
+    {
+        if (!root.TryGetProperty("tools", out JsonElement tools)
+            || tools.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (System.Text.Json.JsonProperty entry in tools.EnumerateObject())
+        {
+            if (lib.Tools.Count >= MaxLibraryEntries) { break; }
+
+            // The key is normalised the same way a name from an advisory is,
+            // so "Cobalt Strike" in the file matches "cobalt-strike" in a
+            // report without the editor having to know the rule.
+            string key = NormName(entry.Name);
+            if (key.Length == 0) { continue; }
+
+            if (entry.Value.ValueKind == JsonValueKind.Null)
+            {
+                if (lib.Tools.Remove(key)) { lib.Removed++; }
+                continue;
+            }
+
+            if (entry.Value.ValueKind != JsonValueKind.Object) { continue; }
+
+            string label = Str(entry.Value, "label") ?? string.Empty;
+            string kind = Str(entry.Value, "kind") ?? string.Empty;
+
+            lib.Tools[key] = new ToolInfo(
+                Clip(label.Length > 0 ? label.Trim() : entry.Name.Trim(), 80),
+                Clip(kind.Trim(), 60),
+                StringArray(entry.Value, "processes"),
+                StringArray(entry.Value, "keywords"),
+                entry.Value.TryGetProperty("noisy", out JsonElement noisy)
+                    && noisy.ValueKind == JsonValueKind.True);
+
+            lib.Added++;
+        }
+    }
+
+    private static void ReadCves(JsonElement root, HuntLibrary lib)
+    {
+        if (!root.TryGetProperty("cves", out JsonElement cves)
+            || cves.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (System.Text.Json.JsonProperty entry in cves.EnumerateObject())
+        {
+            if (lib.Cves.Count >= MaxLibraryEntries) { break; }
+
+            string id = entry.Name.Trim();
+            if (id.Length == 0) { continue; }
+
+            if (entry.Value.ValueKind == JsonValueKind.Null)
+            {
+                if (lib.Cves.Remove(id)) { lib.Removed++; }
+                continue;
+            }
+
+            if (entry.Value.ValueKind != JsonValueKind.Object) { continue; }
+
+            lib.Cves[Clip(id, 30)] = (
+                Clip((Str(entry.Value, "product") ?? string.Empty).Trim(), 120),
+                Clip((Str(entry.Value, "issue") ?? string.Empty).Trim(), 120));
+
+            lib.Added++;
+        }
+    }
+
+    private static void ReadRanges(JsonElement root, HuntLibrary lib)
+    {
+        if (!root.TryGetProperty("sharedRanges", out JsonElement ranges)
+            || ranges.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (JsonElement entry in ranges.EnumerateArray())
+        {
+            if (lib.SharedRanges.Count >= MaxLibraryEntries) { break; }
+            if (entry.ValueKind != JsonValueKind.Object) { continue; }
+
+            string cidr = (Str(entry, "cidr") ?? string.Empty).Trim();
+
+            // A range that will not parse would silently flag nothing, so it
+            // is dropped here rather than at every address comparison.
+            if (cidr.Length == 0 || ParseNet(cidr) is null) { continue; }
+
+            lib.SharedRanges.Add((
+                Clip(cidr, 50),
+                Clip((Str(entry, "owner") ?? string.Empty).Trim(), 80)));
+
+            lib.Added++;
+        }
+    }
+
+    private static string[] StringArray(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out JsonElement array)
+            || array.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        var values = new List<string>();
+        foreach (JsonElement item in array.EnumerateArray())
+        {
+            if (values.Count >= 64) { break; }
+            if (item.ValueKind != JsonValueKind.String) { continue; }
+
+            string value = (item.GetString() ?? string.Empty).Trim();
+            if (value.Length > 0) { values.Add(Clip(value, 200)); }
+        }
+
+        return values.ToArray();
+    }
+
+    // ====================================================================
     // Splunk search building
     // ====================================================================
 
@@ -2243,11 +2873,54 @@
         }
     }
 
-    /// <summary>Normalises the scope box: a blank falls back to index=*, and 500 characters is the ceiling.</summary>
-    private static string ResolveScope(string? scope)
+    /// <summary>Normalises the scope box: a blank falls back to the file's default, and 500 characters is the ceiling.</summary>
+    private static string ResolveScope(string? scope, string fallback) =>
+        Clip(string.IsNullOrWhiteSpace(scope) ? fallback : scope.Trim(), 500);
+
+    /// <summary>
+    /// Renders one search definition against one category's indicators, or
+    /// null when nothing is left to search after the definition's filter.
+    ///
+    /// Only the template, item and separator come from the file. Every
+    /// indicator still goes through Quote, so a value lifted out of an
+    /// uploaded advisory cannot break out of its own quoted term and change
+    /// the shape of the search.
+    /// </summary>
+    private static BuiltSearch? BuildSearch(SearchDef def, string key, List<IocItem> items, string scope)
     {
-        string s = string.IsNullOrWhiteSpace(scope) ? "index=*" : scope.Trim();
-        return s.Length > 500 ? s[..500] : s;
+        List<IocItem> pool = def.Include switch
+        {
+            "clean" => items.Where(i => !i.Flagged).ToList(),
+            "flagged" => items.Where(i => i.Flagged).ToList(),
+            _ => items,
+        };
+
+        if (pool.Count == 0) { return null; }
+
+        List<string> terms = def.Source == "values"
+            ? Dedupe(pool.Select(i => i.Value))
+            : SearchTerms(key, pool);
+
+        if (def.MaxTerms > 0 && terms.Count > def.MaxTerms)
+        {
+            terms = terms.Take(def.MaxTerms).ToList();
+        }
+
+        if (terms.Count == 0) { return null; }
+
+        string joined = string.Join(
+            def.Separator,
+            terms.Select(t => def.Item.Replace("{value}", Quote(t), StringComparison.Ordinal)));
+
+        return new BuiltSearch
+        {
+            Name = def.Name,
+            Note = def.Note,
+            Terms = terms.Count,
+            Spl = def.Template
+                .Replace("{scope}", def.Scope ?? scope, StringComparison.Ordinal)
+                .Replace("{terms}", joined, StringComparison.Ordinal),
+        };
     }
 
     /// <summary>
@@ -2256,9 +2929,9 @@
     /// No time modifiers and no pipes: the analyst sets the range in the time
     /// picker, and a bare search is the one form that pastes anywhere.
     /// </summary>
-    private static List<IocCategory> BuildCategories(IocStore store, string? scope)
+    private static List<IocCategory> BuildCategories(IocStore store, string? scope, SearchBook book)
     {
-        string searchScope = ResolveScope(scope);
+        string searchScope = ResolveScope(scope, book.DefaultScope);
 
         var output = new List<IocCategory>();
 
@@ -2275,13 +2948,12 @@
                 Items = items,
             };
 
-            if (!NoSearch.Contains(key))
+            if (book.ByKey.TryGetValue(key, out List<SearchDef>? defs))
             {
-                List<string> terms = SearchTerms(key, items);
-                if (terms.Count > 0)
+                foreach (SearchDef def in defs)
                 {
-                    category.Spl = searchScope + " ("
-                        + string.Join(" OR ", terms.Select(Quote)) + ")";
+                    BuiltSearch? built = BuildSearch(def, key, items, searchScope);
+                    if (built is not null) { category.Searches.Add(built); }
                 }
             }
 
