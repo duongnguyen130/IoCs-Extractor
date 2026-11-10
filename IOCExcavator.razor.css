@@ -670,11 +670,6 @@
     line-height: 1.7;
 }
 
-.ioc-excavator .ix-ctx {
-    color: var(--ix-text-2);
-    font-size: 12.5px;
-}
-
 .ioc-excavator .ix-rel {
     color: var(--ix-text-3);
     font-family: var(--ix-mono);
@@ -752,16 +747,47 @@
 /* Splunk search block. */
 
 .ioc-excavator .ix-spl {
-    margin-top: 14px;
     border-top: 1px solid var(--ix-line-soft);
-    padding-top: 12px;
+    padding-top: 10px;
+    margin-top: 10px;
 }
 
 .ioc-excavator .ix-spl summary {
     cursor: pointer;
     font-size: 13px;
+    font-weight: 550;
     color: var(--ix-text-2);
     width: max-content;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ioc-excavator .ix-spl summary:hover {
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-spl-count {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--ix-text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.ioc-excavator .ix-spl-note {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--ix-text-2);
+}
+
+.ioc-excavator .ix-srcline {
+    margin: 18px 0 0;
+    font-size: 11.5px;
+    color: var(--ix-text-3);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 .ioc-excavator .ix-spl-inner {

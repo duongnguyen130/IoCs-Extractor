@@ -1,0 +1,157 @@
+{
+  // IOC Excavator - hunt library.
+  //
+  // WHAT THIS IS
+  //   What the tool recognises when it reads an advisory: software worth
+  //   hunting, CVEs worth annotating, and address ranges that belong to
+  //   shared providers. Searches live in the other file; this one decides
+  //   what gets found in the first place.
+  //
+  // WHERE IT LIVES
+  //   Components/Pages/IOCExcavator/IOCExcavator.library.json, beside the
+  //   page and outside wwwroot, so it is never served over HTTP.
+  //
+  // HOW IT IS READ
+  //   Read on each Extract, cached on the file's timestamp. Edit and press
+  //   Extract again - no rebuild, no restart. Invalid JSON falls back to the
+  //   built-in library and says so on screen.
+  //
+  //   Entries MERGE over the built-ins: this file adds to what the tool
+  //   already knows, it does not replace it. An entry whose key matches a
+  //   built-in overrides that one. An entry set to null deletes it.
+  //   "replaceBuiltIns": true starts from an empty library instead.
+  //
+  // SYNTAX
+  //   // and /* */ comments and trailing commas are allowed.
+
+  // Set to true only if you want nothing but what is written below.
+  "replaceBuiltIns": false,
+
+  // ------------------------------------------------------------------
+  // TOOLS
+  //
+  //   Software an advisory names, and what to actually hunt for.
+  //
+  //   key         match key. Letters and digits only, lowercase - the tool
+  //               normalises names the same way, so "cobaltstrike" matches
+  //               "Cobalt Strike", "cobalt-strike" and "COBALT STRIKE".
+  //               A key of 5 characters or more also matches as a substring.
+  //   label       how it is shown.
+  //   kind        what it is used for. Shown beside the name.
+  //   processes   executables to search for. These are what a tool category
+  //               contributes to a Splunk search, not the product name.
+  //   keywords    other strings worth searching: domains, command
+  //               fragments, file names.
+  //   noisy       true for legitimate software present on most hosts. It is
+  //               still reported, but flagged as needing a tighter scope.
+  //
+  //   The built-ins already cover the common RMM, exfil, credential and
+  //   LOLBin tooling. Add what your advisories actually name.
+  // ------------------------------------------------------------------
+
+  "tools": {
+
+    // --- examples, safe to delete ---
+
+    "velociraptor": {
+      "label": "Velociraptor",
+      "kind": "Remote access (DFIR tool abused)",
+      "processes": ["velociraptor.exe", "Velociraptor.exe"],
+      "keywords": ["velociraptor", "velociraptor.config.yaml"],
+      "noisy": false
+    },
+
+    "pdqdeploy": {
+      "label": "PDQ Deploy",
+      "kind": "Lateral movement (software deployment)",
+      "processes": ["PDQDeployService.exe", "PDQInventory.exe"],
+      "keywords": ["pdq.com"],
+      "noisy": true
+    },
+
+    "gotohttp": {
+      "label": "GoToHTTP",
+      "kind": "Remote access (RMM)",
+      "processes": ["gotohttp.exe"],
+      "keywords": ["gotohttp.com"],
+      "noisy": false
+    }
+
+    // --- overriding and removing built-ins ---
+    //
+    // Override: same key, your values win.
+    //   "powershell": {
+    //     "label": "PowerShell", "kind": "Execution",
+    //     "processes": ["powershell.exe", "pwsh.exe", "powershell_ise.exe"],
+    //     "noisy": true
+    //   },
+    //
+    // Remove a built-in that is noise in your environment:
+    //   "winrar": null,
+  },
+
+  // ------------------------------------------------------------------
+  // CVES
+  //
+  //   Product context shown beside a CVE the advisory references. Purely
+  //   descriptive - it does not change what is extracted.
+  //
+  //   product   what is affected, specific enough to tell an analyst
+  //             whether you run it.
+  //   issue     the class of flaw, in a few words.
+  // ------------------------------------------------------------------
+
+  "cves": {
+
+    "CVE-2023-4966": {
+      "product": "Citrix NetScaler ADC / Gateway",
+      "issue": "Session token leak (CitrixBleed)"
+    },
+
+    "CVE-2024-3400": {
+      "product": "Palo Alto PAN-OS GlobalProtect",
+      "issue": "Command injection, unauthenticated"
+    },
+
+    "CVE-2023-34362": {
+      "product": "Progress MOVEit Transfer",
+      "issue": "SQL injection to RCE"
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // SHARED RANGES
+  //
+  //   Addresses inside these are flagged rather than dropped: they are real
+  //   indicators that will also match a lot of ordinary traffic, so the
+  //   analyst is told to scope the search rather than losing the finding.
+  //
+  //   The built-ins cover the big CDN, cloud and public DNS ranges. The
+  //   entries worth adding here are YOUR OWN: egress ranges, VPN pools, the
+  //   scanner subnet, anything that turns up in logs constantly. An FTB
+  //   address appearing in an advisory is worth knowing about, but hunting
+  //   it unscoped returns the whole estate.
+  //
+  //   cidr    IPv4 or IPv6, with or without a prefix. A range that does not
+  //           parse is dropped at load rather than failing silently later.
+  //   owner   who it belongs to. Shown to the analyst as the reason.
+  // ------------------------------------------------------------------
+
+  "sharedRanges": [
+
+    // --- examples, replace with your own ---
+
+    { "cidr": "13.107.6.152/31", "owner": "Microsoft 365" },
+    { "cidr": "13.107.18.10/31", "owner": "Microsoft 365" },
+    { "cidr": "52.96.0.0/14", "owner": "Microsoft Exchange Online" },
+    { "cidr": "151.101.0.0/16", "owner": "Fastly" },
+    { "cidr": "199.232.0.0/16", "owner": "Fastly" },
+    { "cidr": "23.32.0.0/11", "owner": "Akamai" },
+    { "cidr": "2606:4700::/32", "owner": "Cloudflare" },
+    { "cidr": "2a00:1450::/32", "owner": "Google" }
+
+    // Your own ranges, e.g.:
+    // { "cidr": "10.0.0.0/8",      "owner": "FTB internal" },
+    // { "cidr": "198.51.100.0/24", "owner": "FTB egress" },
+  ]
+}

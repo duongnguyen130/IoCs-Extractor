@@ -1,0 +1,272 @@
+{
+  // IOC Excavator - recommended Splunk searches.
+  //
+  // WHERE THIS LIVES
+  //   Components/Pages/IOCExcavator/IOCExcavator.searches.json, beside the page.
+  //   It is outside wwwroot, so it is never served over HTTP: nobody can read
+  //   your hunt logic by browsing to it. Editing it means editing the source
+  //   tree, which is the point.
+  //
+  // HOW IT IS READ
+  //   Read on each Extract, cached on the file's timestamp. Edit it and press
+  //   Extract again - no rebuild, no app restart. If the file is missing,
+  //   unreadable or invalid, the page falls back to the built-in searches and
+  //   says so, so a bad edit never takes the tool down.
+  //
+  // SYNTAX
+  //   // and /* */ comments and trailing commas are allowed. The rest is JSON.
+  //
+  // A SEARCH ENTRY
+  //   name       what the analyst sees on the expander.  Required in practice.
+  //   note       one line under the heading. Say when to use it.
+  //   template   the search. MUST contain {terms}; {scope} is optional.
+  //   item       how one indicator is written. Default "{value}".
+  //              {value} is always inserted quoted and escaped.
+  //   separator  what joins the items. Default " OR ".
+  //   scope      overrides the page's Splunk scope box for this search only.
+  //   source     "search" (default) uses the derived hunt terms - a tool
+  //              contributes AnyDesk.exe rather than AnyDesk.
+  //              "values" uses the literal values shown in the list.
+  //   include    "all" (default), "clean" (skip the flagged noisy indicators),
+  //              or "flagged" (only those).
+  //   maxTerms   cap on indicators in one search. Omit for no cap.
+  //
+  //   A template with no {terms} is rejected and the default is used instead.
+  //   Without it the search would be a bare scope that matches everything.
+  //
+  // CATEGORY KEYS
+  //   ipv4  ipv6  domain  url  email
+  //   sha256  sha1  md5  sha512  ssdeep
+  //   filename  commandline  registry  mutex
+  //   tool  malware  actor
+  //   cve
+  //   technique
+  //   other
+  //
+  //   A key you leave out keeps its built-in search. An empty array [] means
+  //   this category gets no search at all. A key that is not on the list above
+  //   is ignored and reported, so a typo is visible rather than silent.
+  //
+  //   Categories themselves are defined in IOCExcavator.razor: a new category
+  //   needs parsing code, so it cannot be added from here.
+
+  "version": 1,
+
+  // Used when the Splunk scope box on the page is left empty.
+  "defaultScope": "index=*",
+
+  // The search produced when several categories are ticked and combined.
+  "combined": {
+    "name": "Combined search",
+    "template": "{scope} ({terms})"
+  },
+
+  "searches": {
+
+    "ipv4": [
+      {
+        "name": "Any mention",
+        "note": "Widest net. Start here, then narrow with one of the others.",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Traffic to or from",
+        "note": "Firewall, proxy and netflow data with CIM address fields.",
+        "template": "{scope} (src_ip IN ({terms}) OR dest_ip IN ({terms}))",
+        "separator": ", "
+      },
+      {
+        "name": "Traffic, noisy ranges dropped",
+        "note": "Same as above without the shared CDN and cloud addresses.",
+        "template": "{scope} (src_ip IN ({terms}) OR dest_ip IN ({terms}))",
+        "separator": ", ",
+        "include": "clean"
+      }
+    ],
+
+    "ipv6": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Traffic to or from",
+        "template": "{scope} (src_ip IN ({terms}) OR dest_ip IN ({terms}))",
+        "separator": ", "
+      }
+    ],
+
+    "domain": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "DNS resolution",
+        "note": "Sysmon event 22, or any DNS source with a query field.",
+        "template": "{scope} query IN ({terms})",
+        "separator": ", "
+      },
+      {
+        "name": "Web request",
+        "note": "Proxy logs. Subdomains included.",
+        "template": "{scope} (site IN ({terms}) OR dest IN ({terms}))",
+        "separator": ", "
+      }
+    ],
+
+    "url": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Proxy request",
+        "template": "{scope} url IN ({terms})",
+        "separator": ", "
+      }
+    ],
+
+    "email": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Sender or recipient",
+        "note": "Mail gateway logs.",
+        "template": "{scope} (sender IN ({terms}) OR recipient IN ({terms}))",
+        "separator": ", "
+      }
+    ],
+
+    "sha256": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "File hash match",
+        "note": "Sysmon event 1 and EDR process data.",
+        "template": "{scope} (file_hash IN ({terms}) OR process_hash IN ({terms}))",
+        "separator": ", ",
+        // A big advisory can list hundreds of hashes; keep the search pasteable.
+        "maxTerms": 300
+      }
+    ],
+
+    "sha1": [
+      { "name": "Any mention", "template": "{scope} ({terms})" },
+      {
+        "name": "File hash match",
+        "template": "{scope} (file_hash IN ({terms}) OR process_hash IN ({terms}))",
+        "separator": ", ",
+        "maxTerms": 300
+      }
+    ],
+
+    "md5": [
+      { "name": "Any mention", "template": "{scope} ({terms})" },
+      {
+        "name": "File hash match",
+        "template": "{scope} (file_hash IN ({terms}) OR process_hash IN ({terms}))",
+        "separator": ", ",
+        "maxTerms": 300
+      }
+    ],
+
+    "sha512": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ],
+
+    "ssdeep": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ],
+
+    "filename": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "File written or executed",
+        "note": "Sysmon events 1 and 11.",
+        "template": "{scope} (file_name IN ({terms}) OR process_name IN ({terms}))",
+        "separator": ", "
+      }
+    ],
+
+    "commandline": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Process command line",
+        "note": "Exact match. Attackers vary arguments, so treat a miss as inconclusive.",
+        "template": "{scope} process IN ({terms})",
+        "separator": ", "
+      }
+    ],
+
+    "registry": [
+      {
+        "name": "Any mention",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Registry write",
+        "note": "Sysmon events 12 to 14.",
+        "template": "{scope} registry_path IN ({terms})",
+        "separator": ", "
+      }
+    ],
+
+    "mutex": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ],
+
+    "tool": [
+      {
+        "name": "Process names",
+        "note": "Searches the executables, not the product name.",
+        "template": "{scope} ({terms})"
+      },
+      {
+        "name": "Process execution",
+        "template": "{scope} process_name IN ({terms})",
+        "separator": ", "
+      },
+      {
+        "name": "Product name as written",
+        "note": "For ticket notes and documentation, where the product is named.",
+        "template": "{scope} ({terms})",
+        "source": "values"
+      }
+    ],
+
+    "malware": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ],
+
+    "actor": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ],
+
+    // CVE ids almost never appear in a log line, so no search is offered.
+    // Delete the [] and add an entry if your vuln data is in Splunk.
+    "cve": [],
+
+    "technique": [
+      {
+        "name": "Any mention",
+        "note": "Useful against detection and alert data, not raw telemetry.",
+        "template": "{scope} ({terms})"
+      }
+    ],
+
+    "other": [
+      { "name": "Any mention", "template": "{scope} ({terms})" }
+    ]
+  }
+}
