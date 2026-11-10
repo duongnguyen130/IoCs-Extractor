@@ -8,9 +8,15 @@
    as one product.
 
    Colour is meaningful, not decorative:
-     red    an indicator that will also hit benign traffic and needs scoping
-     amber  an entry named in the advisory but not verified
-     yellow a copied confirmation, or the loaded file name
+     red     an indicator that will also hit benign traffic and needs scoping
+     amber   an entry named in the advisory but not verified
+     yellow  a copied confirmation, or the loaded file name
+     accents one hue per IOC group, so a section is recognised before it is read
+
+   The group accents are marks only - a rail and a dot. Headings keep the normal
+   ink colour, because a hue picked to be told apart from five other hues is not
+   also guaranteed to be readable as text. Every accent appears beside the group
+   name in words, so the colour is never the only thing carrying the meaning.
 */
 
 /* Theme tokens. Override these from your own stylesheet to
@@ -34,6 +40,17 @@
     --ix-slate-soft: #EEF1F5;
     --ix-mark: #FDE68A;
     --ix-mark-text: #3F2D00;
+
+    /* Group accents, in display order. The order is the colourblind-safety
+       mechanism, not a preference: adjacent pairs were checked for protan,
+       deutan and tritan separation, so moving one means re-checking. */
+    --ix-g-1: #2A78D6;
+    --ix-g-2: #EB6834;
+    --ix-g-3: #1BAF7A;
+    --ix-g-4: #6250D6;
+    --ix-g-5: #E87BA4;
+    --ix-g-6: #008300;
+    --ix-g-7: #8A94A3;
 
     --ix-radius: 14px;
     --ix-radius-sm: 9px;
@@ -74,6 +91,15 @@
         --ix-mark: #4A3A10;
         --ix-mark-text: #FBD24E;
         --ix-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+
+        /* Same six hues, stepped for the dark surface rather than flipped. */
+        --ix-g-1: #3987E5;
+        --ix-g-2: #D95926;
+        --ix-g-3: #199E70;
+        --ix-g-4: #9085E9;
+        --ix-g-5: #D55181;
+        --ix-g-6: #008300;
+        --ix-g-7: #6F7B8A;
     }
 }
 
@@ -94,21 +120,6 @@
 
 .ioc-excavator .ix-intake {
     padding: 26px;
-}
-
-.ioc-excavator .ix-card-head h2 {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 650;
-    letter-spacing: -.02em;
-    color: var(--ix-text);
-}
-
-.ioc-excavator .ix-sub {
-    margin: 6px 0 20px;
-    color: var(--ix-text-2);
-    font-size: 14px;
-    max-width: 62ch;
 }
 
 .ioc-excavator code {
@@ -175,12 +186,6 @@
     margin: 0;
     font-weight: 600;
     font-size: 15px;
-}
-
-.ioc-excavator .ix-dropzone-sub {
-    margin: 4px 0 0;
-    color: var(--ix-text-2);
-    font-size: 13.5px;
 }
 
 .ioc-excavator .ix-dropzone ::deep .ix-fileinput {
@@ -547,6 +552,40 @@
     gap: 8px;
 }
 
+/* Group accents. A class only names the hue; the rules below spend it. */
+
+.ioc-excavator .ix-g-net { --ix-accent: var(--ix-g-1); }
+.ioc-excavator .ix-g-hash { --ix-accent: var(--ix-g-2); }
+.ioc-excavator .ix-g-host { --ix-accent: var(--ix-g-3); }
+.ioc-excavator .ix-g-tool { --ix-accent: var(--ix-g-4); }
+.ioc-excavator .ix-g-cve { --ix-accent: var(--ix-g-5); }
+.ioc-excavator .ix-g-ttp { --ix-accent: var(--ix-g-6); }
+.ioc-excavator .ix-g-other { --ix-accent: var(--ix-g-7); }
+
+.ioc-excavator .ix-stat-group span::before,
+.ioc-excavator .ix-seg-dot::before,
+.ioc-excavator .ix-chip::before {
+    content: "";
+    flex: none;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--ix-accent, var(--ix-text-3));
+}
+
+.ioc-excavator .ix-stat-group span {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.ioc-excavator .ix-seg-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
 /* One category: header badges, indicator rows, Splunk search. */
 
 .ioc-excavator .ix-cat {
@@ -564,12 +603,21 @@
     flex-wrap: wrap;
     padding: 11px 16px;
     border-bottom: 1px solid var(--ix-line-soft);
+
+    /* Plain first, then the tinted version: a browser without color-mix keeps
+       the flat header rather than losing the background altogether. */
     background: var(--ix-surface-2);
+    background: color-mix(in srgb, var(--ix-accent, transparent) 7%, var(--ix-surface-2));
+
+    /* The accent rail. An inset shadow rather than a border, so it sits inside
+       the card's rounded corner and does not shift the header's height. */
+    box-shadow: inset 3px 0 0 var(--ix-accent, var(--ix-line));
 }
 
 .ioc-excavator .ix-label {
     font-weight: 650;
     font-size: 14.5px;
+    letter-spacing: -.01em;
 }
 
 .ioc-excavator .ix-badge {
@@ -723,7 +771,7 @@
     margin-top: 10px;
 }
 
-.ioc-excavator .ix-spl pre {
+.ioc-excavator .ix-spl-inner pre {
     margin: 0;
     max-height: 220px;
     overflow: auto;
@@ -741,6 +789,74 @@
 
 .ioc-excavator .ix-spl-inner .ix-btn {
     align-self: flex-start;
+}
+
+/* Combined search: the per-category tick, and the merged panel. */
+
+.ioc-excavator .ix-combine {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ix-text-2);
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 9px 4px 7px;
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    background: var(--ix-surface);
+}
+
+.ioc-excavator .ix-combine:hover {
+    border-color: var(--ix-text-3);
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-combine input {
+    margin: 0;
+    width: 14px;
+    height: 14px;
+    accent-color: var(--ix-accent, var(--ix-text));
+    cursor: pointer;
+}
+
+.ioc-excavator .ix-combine:has(input:checked) {
+    border-color: var(--ix-accent, var(--ix-text));
+    color: var(--ix-text);
+}
+
+.ioc-excavator .ix-combine:focus-within {
+    outline: 2px solid var(--ix-mark);
+    outline-offset: 1px;
+}
+
+.ioc-excavator .ix-combined {
+    --ix-accent: var(--ix-text-2);
+}
+
+.ioc-excavator .ix-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.ioc-excavator .ix-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ix-text-2);
+    background: var(--ix-surface-2);
+    border: 1px solid var(--ix-line);
+    border-radius: 999px;
+    padding: 3px 11px 3px 9px;
+}
+
+.ioc-excavator .ix-combined .ix-spl-inner {
+    margin-top: 0;
 }
 
 /* Empty and error states. */

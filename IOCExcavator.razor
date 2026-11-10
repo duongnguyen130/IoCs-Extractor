@@ -26,23 +26,12 @@
 <div class="ioc-excavator">
 
     <section class="ix-card ix-intake">
-        <div class="ix-card-head">
-            <h2>Pull IOCs out of a CISA advisory</h2>
-            <p class="ix-sub">
-                Drop one or more STIX bundles and get de-duplicated lists ready to
-                paste into Excel, plus one broad Splunk search per category.
-            </p>
-        </div>
 
         <div class="ix-dropzone">
             <InputFile OnChange="OnFilesChosen" multiple class="ix-fileinput" />
             <div class="ix-dropzone-inner">
                 <div class="ix-dropzone-icon" aria-hidden="true"></div>
                 <p class="ix-dropzone-title">Drop advisories here, or click to browse</p>
-                <p class="ix-dropzone-sub">
-                    STIX 2.x <code>.json</code> is parsed in full. Any other text file
-                    is swept with regex for IPs, domains, URLs, hashes and CVEs.
-                </p>
             </div>
         </div>
 
@@ -120,7 +109,9 @@
                 <div class="ix-stat"><b>@totalItems</b><span>indicators</span></div>
                 @foreach (var g in GroupTotals())
                 {
-                    <div class="ix-stat"><b>@g.Count</b><span>@g.Group</span></div>
+                    <div class="ix-stat ix-stat-group @GroupClass(g.Group)">
+                        <b>@g.Count</b><span>@g.Group</span>
+                    </div>
                 }
             </div>
 
@@ -173,7 +164,8 @@
                     @foreach (var g in GroupTotals())
                     {
                         string name = g.Group;
-                        <button type="button" aria-pressed="@Pressed(activeGroup == name)"
+                        <button type="button" class="@SegClass(name)"
+                                aria-pressed="@Pressed(activeGroup == name)"
                                 @onclick="() => activeGroup = name">@ShortGroup(name)</button>
                     }
                 </div>
@@ -192,17 +184,68 @@
                 </div>
             </div>
 
+            @if (combineKeys.Count > 0)
+            {
+                <article class="ix-cat ix-combined">
+                    <div class="ix-cat-head">
+                        <span class="ix-label">Combined search</span>
+                        <span class="ix-badge">@combinedTerms terms</span>
+                        <span class="ix-group-tag">@combineKeys.Count selected</span>
+
+                        <div class="ix-right">
+                            <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                    disabled="@(combinedSpl is null)"
+                                    @onclick="CopyCombinedAsync">
+                                @(copiedKey == "__combined" ? "Copied" : "Copy SPL")
+                            </button>
+                            <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
+                                    @onclick="ClearCombine">Clear</button>
+                        </div>
+                    </div>
+
+                    <div class="ix-cat-body">
+                        <div class="ix-chips">
+                            @foreach (IocCategory s in CombineSelection())
+                            {
+                                <span class="ix-chip @GroupClass(s.Group)">@s.Label</span>
+                            }
+                        </div>
+
+                        @if (combinedSpl is null)
+                        {
+                            <div class="ix-cat-note">
+                                Tick Combine on at least two categories to search them together.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ix-spl-inner">
+                                <pre>@combinedSpl</pre>
+                            </div>
+                        }
+                    </div>
+                </article>
+            }
+
             @foreach (IocCategory c in VisibleCategories())
             {
                 IocCategory cat = c;
 
-                <article class="ix-cat">
+                <article class="ix-cat @GroupClass(cat.Group)">
                     <div class="ix-cat-head">
                         <span class="ix-label">@cat.Label</span>
                         <span class="ix-badge">@cat.Items.Count</span>
                         <span class="ix-group-tag">@cat.Group</span>
 
                         <div class="ix-right">
+                            @if (cat.Spl is not null)
+                            {
+                                <label class="ix-combine" title="Add this category to the combined search">
+                                    <input type="checkbox" checked="@combineKeys.Contains(cat.Key)"
+                                           @onchange="() => ToggleCombine(cat.Key)" />
+                                    <span>Combine</span>
+                                </label>
+                            }
                             <button type="button" class="ix-btn ix-btn-ghost ix-btn-sm"
                                     @onclick="() => CopyListAsync(cat)">
                                 @(copiedKey == cat.Key + ":list" ? "Copied" : "Copy list")
@@ -306,19 +349,11 @@
     private IJSObjectReference jsModule { get; set; } = null!;
 
     /*
-     * IOC EXCAVATOR
-     *
-     * Reads CISA STIX 2.x bundles, or any text holding indicators, and returns
-     * de-duplicated lists by category with a broad Splunk search for each.
-     *
-     * Two judgements are built in rather than left to the analyst:
-     *
-     *   - Shared infrastructure is flagged, not dropped. A Cloudflare address
-     *     in an advisory is a real IOC that will also match a lot of ordinary
-     *     traffic, and silently removing it loses a finding.
-     *
-     *   - Legitimate admin software is flagged the same way. AnyDesk is an
-     *     IOC in a ransomware advisory and a help-desk tool on Tuesday.
+     * Shared infrastructure and legitimate admin software are flagged, never
+     * dropped: a Cloudflare address in an advisory is a real IOC that also
+     * matches ordinary traffic, and AnyDesk is an IOC in a ransomware
+     * advisory and a help-desk tool on Tuesday. Removing either loses a
+     * finding, so both are kept and marked as needing a tighter scope.
      *
      * Nothing is retained: parsed files are dropped on Wipe and on Dispose.
      */
@@ -355,11 +390,19 @@
     private string activeGroup = "all";
     private string? copiedKey;
 
+    /// <summary>Categories ticked for the combined search, by category key.</summary>
+    private readonly HashSet<string> combineKeys = new(StringComparer.Ordinal);
+
+    private string? combinedSpl;
+    private int combinedTerms;
+
+    /// <summary>The scope the last run used, so the combined search matches the per-category ones.</summary>
+    private string resolvedScope = "index=*";
+
     private string? errorMessage;
     private bool isBusy;
     private bool hasExtracted;
 
-    /// <summary>One file waiting to be parsed.</summary>
     private sealed record QueuedFile(string Name, byte[] Bytes, bool Pasted);
 
     private static string Kb(int bytes) =>
@@ -392,6 +435,23 @@
         _ => "other",
     };
 
+    /// <summary>
+    /// Accent class for a group. The class only sets --ix-accent, which the
+    /// stylesheet spends on a rail and a dot, never on the heading text.
+    /// </summary>
+    private static string GroupClass(string group) => group switch
+    {
+        "Network" => "ix-g-net",
+        "Hashes" => "ix-g-hash",
+        "Host Artifacts" => "ix-g-host",
+        "Tools & Malware" => "ix-g-tool",
+        "Vulnerabilities" => "ix-g-cve",
+        "Behaviors (TTPs)" => "ix-g-ttp",
+        _ => "ix-g-other",
+    };
+
+    private static string SegClass(string group) => "ix-seg-dot " + GroupClass(group);
+
     private IEnumerable<(string Group, int Count)> GroupTotals() =>
         categories
             .GroupBy(c => c.Group)
@@ -402,13 +462,70 @@
             ? categories
             : categories.Where(c => c.Group == activeGroup);
 
+    // ====================================================================
+    // combined search
+    // ====================================================================
+
+    /// <summary>Categories currently ticked, in display order. Only ones that have a search qualify.</summary>
+    private List<IocCategory> CombineSelection() =>
+        categories.Where(c => c.Spl is not null && combineKeys.Contains(c.Key)).ToList();
+
+    private void ToggleCombine(string key)
+    {
+        if (!combineKeys.Remove(key)) { combineKeys.Add(key); }
+
+        copiedKey = null;
+        RebuildCombined();
+    }
+
+    private void ClearCombine()
+    {
+        combineKeys.Clear();
+        copiedKey = null;
+        RebuildCombined();
+    }
+
+    /// <summary>
+    /// Merges the ticked categories into one search. Terms are pooled and then
+    /// de-duplicated, so a value listed in two categories is searched once,
+    /// and each category still contributes its search terms rather than its
+    /// display values. Cached, not computed per render: a category can hold
+    /// thousands of items and the selection only changes on a click.
+    /// </summary>
+    private void RebuildCombined()
+    {
+        combinedSpl = null;
+        combinedTerms = 0;
+
+        List<IocCategory> picked = CombineSelection();
+        if (picked.Count < 2) { return; }
+
+        var pooled = new List<string>();
+        foreach (IocCategory c in picked)
+        {
+            pooled.AddRange(SearchTerms(c.Key, c.Items));
+        }
+
+        List<string> merged = Dedupe(pooled);
+        if (merged.Count == 0) { return; }
+
+        combinedTerms = merged.Count;
+        combinedSpl = resolvedScope + " ("
+            + string.Join(" OR ", merged.Select(Quote)) + ")";
+    }
+
+    private async Task CopyCombinedAsync()
+    {
+        if (combinedSpl is not null && await CopyAsync(combinedSpl))
+        {
+            copiedKey = "__combined";
+        }
+    }
+
     private string PasteHint()
     {
         string t = pasteText.Trim();
-        if (t.Length == 0)
-        {
-            return "STIX JSON is parsed in full. Anything else is swept with regex.";
-        }
+        if (t.Length == 0) { return string.Empty; }
 
         if (t[0] is '{' or '[')
         {
@@ -571,6 +688,9 @@
         isBusy = true;
         errorMessage = null;
         copiedKey = null;
+        combineKeys.Clear();
+        combinedSpl = null;
+        combinedTerms = 0;
 
         try
         {
@@ -600,7 +720,8 @@
                 }
             }
 
-            categories = BuildCategories(store, splunkScope);
+            resolvedScope = ResolveScope(splunkScope);
+            categories = BuildCategories(store, resolvedScope);
             reports = runReports;
             errors = runErrors;
             totalItems = categories.Sum(c => c.Items.Count);
@@ -797,6 +918,14 @@
                 sb.AppendLine();
             }
 
+            if (combinedSpl is not null)
+            {
+                sb.AppendLine($"### Combined ({combinedTerms} terms): "
+                    + string.Join(" + ", CombineSelection().Select(c => c.Label)));
+                sb.AppendLine(combinedSpl);
+                sb.AppendLine();
+            }
+
             name = $"splunk_searches_{stamp}.txt";
             mime = "text/plain";
         }
@@ -847,6 +976,9 @@
         copiedKey = null;
         errorMessage = null;
         hasExtracted = false;
+        combineKeys.Clear();
+        combinedSpl = null;
+        combinedTerms = 0;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -890,7 +1022,6 @@
     // model types
     // ====================================================================
 
-    /// <summary>One de-duplicated indicator with everything learned about it.</summary>
     private sealed class IocItem
     {
         public string Value { get; init; } = string.Empty;
@@ -912,7 +1043,6 @@
         public string? Mitre { get; set; }
     }
 
-    /// <summary>One category of indicators, with its Splunk search.</summary>
     private sealed class IocCategory
     {
         public string Key { get; init; } = string.Empty;
@@ -923,7 +1053,6 @@
         public string? Note { get; set; }
     }
 
-    /// <summary>One advisory that was parsed.</summary>
     private sealed class ReportInfo
     {
         public string Source { get; init; } = string.Empty;
@@ -1296,7 +1425,6 @@
     // address handling
     // ====================================================================
 
-    /// <summary>A parsed address or CIDR block.</summary>
     private readonly record struct Net(IPAddress Address, int Prefix)
     {
         public bool IsV4 => Address.AddressFamily == AddressFamily.InterNetwork;
@@ -1651,7 +1779,6 @@
         return HashTypes.TryGetValue(key, out string? cat) ? cat : null;
     }
 
-    /// <summary>Decides which category one STIX comparison belongs to.</summary>
     private static string ClassifyComparison(string objType, string path)
     {
         string t = objType.ToLowerInvariant();
@@ -2116,6 +2243,13 @@
         }
     }
 
+    /// <summary>Normalises the scope box: a blank falls back to index=*, and 500 characters is the ceiling.</summary>
+    private static string ResolveScope(string? scope)
+    {
+        string s = string.IsNullOrWhiteSpace(scope) ? "index=*" : scope.Trim();
+        return s.Length > 500 ? s[..500] : s;
+    }
+
     /// <summary>
     /// Turns the store into the display list, one broad search per category.
     ///
@@ -2124,8 +2258,7 @@
     /// </summary>
     private static List<IocCategory> BuildCategories(IocStore store, string? scope)
     {
-        string searchScope = string.IsNullOrWhiteSpace(scope) ? "index=*" : scope.Trim();
-        if (searchScope.Length > 500) { searchScope = searchScope[..500]; }
+        string searchScope = ResolveScope(scope);
 
         var output = new List<IocCategory>();
 
