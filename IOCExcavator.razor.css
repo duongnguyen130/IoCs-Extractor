@@ -827,30 +827,73 @@
 
 /* Splunk search block. */
 
+/* Each search is its own row: the group accent on a rail and the caret, a
+   tint of it behind, and the name in ordinary ink. The hue identifies, the
+   ink stays readable - two of the six accents are too light to read as text
+   on a white surface, so none of them is asked to be text. */
+
 .ioc-excavator .ix-spl {
-    border-top: 1px solid var(--ix-line-soft);
-    padding-top: 10px;
-    margin-top: 10px;
+    margin-top: 8px;
+    border: 1px solid var(--ix-line);
+    border-radius: var(--ix-radius-sm);
+    overflow: hidden;
+    background: var(--ix-surface-2);
+    background: color-mix(in srgb, var(--ix-accent, transparent) 6%, var(--ix-surface-2));
+    box-shadow: inset 3px 0 0 var(--ix-accent, var(--ix-line));
+}
+
+.ioc-excavator .ix-spl:first-of-type {
+    margin-top: 14px;
 }
 
 .ioc-excavator .ix-spl summary {
     cursor: pointer;
-    font-size: 13px;
-    font-weight: 550;
-    color: var(--ix-text-2);
-    width: max-content;
+    padding: 9px 13px 9px 15px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ix-text);
     display: flex;
     align-items: center;
     justify-content: flex-start;
     text-align: left;
-    gap: 8px;
+    gap: 9px;
+    list-style: none;
+    transition: background .12s ease;
+}
+
+/* The browser's own disclosure triangle, replaced by the caret below. */
+.ioc-excavator .ix-spl summary::-webkit-details-marker {
+    display: none;
+}
+
+.ioc-excavator .ix-spl summary::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: 0 1px 0 0;
+    border-right: 2px solid var(--ix-accent, var(--ix-text-3));
+    border-bottom: 2px solid var(--ix-accent, var(--ix-text-3));
+    transform: rotate(-45deg);
+    transition: transform .15s ease;
+}
+
+.ioc-excavator .ix-spl[open] summary::before {
+    transform: rotate(45deg);
 }
 
 .ioc-excavator .ix-spl summary:hover {
-    color: var(--ix-text);
+    background: color-mix(in srgb, var(--ix-accent, transparent) 10%, var(--ix-surface-2));
+}
+
+.ioc-excavator .ix-spl summary:focus-visible {
+    outline: 2px solid var(--ix-mark);
+    outline-offset: -2px;
 }
 
 .ioc-excavator .ix-spl-count {
+    margin-left: auto;
+    padding-left: 10px;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .05em;
@@ -877,7 +920,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    margin-top: 10px;
+    padding: 0 13px 13px 15px;
 }
 
 .ioc-excavator .ix-spl-inner pre {
@@ -888,7 +931,7 @@
     font-size: 12.5px;
     line-height: 1.7;
     color: var(--ix-text);
-    background: var(--ix-surface-2);
+    background: var(--ix-surface);
     border: 1px solid var(--ix-line);
     border-radius: var(--ix-radius-sm);
     padding: 12px 14px;
