@@ -123,6 +123,7 @@
                         <b>@flaggedCount item@(flaggedCount == 1 ? "" : "s") will hit benign traffic.</b>
                         Shared CDN and cloud ranges, plus admin tools that live on most
                         hosts. They are still real IOCs; they just need a tighter scope.
+                        Hover any red value to see why it was flagged.
                     </div>
                 </div>
             }
@@ -303,8 +304,13 @@
                                     <div class="ix-item">
                                         <button type="button"
                                                 class="@ValueClass(row)"
-                                                title="Click to copy this value"
+                                                title="@ValueTitle(row)"
                                                 @onclick="() => CopyValueAsync(row.Value, cat.Key)">@row.Value</button>
+
+                                        @if (row.Flagged)
+                                        {
+                                            <span class="ix-tip" aria-hidden="true">@FlagTip(row)</span>
+                                        }
 
                                         @if (row.Related.Count > 0)
                                         {
@@ -455,6 +461,14 @@
         item.Flagged ? "ix-value ix-flagged" : "ix-value";
 
     private static string RemoveLabel(string fileName) => "Remove " + fileName;
+
+    /// <summary>Hover text for a flagged value: the reason, then what it means for the hunt.</summary>
+    private static string FlagTip(IocItem item) =>
+        (item.FlagNote is null ? "Shared or legitimate" : item.FlagNote)
+        + ". Still a real IOC, but a search for it will also return benign activity, so scope it.";
+
+    private static string ValueTitle(IocItem item) =>
+        item.Flagged ? FlagTip(item) + " Click to copy." : "Click to copy this value";
 
     private static string ShortGroup(string group) => group switch
     {
@@ -1115,6 +1129,9 @@
         /// <summary>Will match benign traffic: shared infrastructure or ordinary admin software.</summary>
         public bool Flagged { get; set; }
 
+        /// <summary>Why it was flagged, shown on hover. Set wherever Flagged is.</summary>
+        public string? FlagNote { get; set; }
+
         /// <summary>Named in the advisory but its process name was not verified.</summary>
         public bool Guess { get; set; }
 
@@ -1641,7 +1658,11 @@
         IocItem? item = store.Add(parsed.Value.IsV4 ? "ipv4" : "ipv6", value, source,
                                   note ?? context);
 
-        if (item is not null && note is not null) { item.Flagged = true; }
+        if (item is not null && note is not null)
+        {
+            item.Flagged = true;
+            item.FlagNote = note;
+        }
     }
 
     private static void AddDomain(IocStore store, string? value, string source,
@@ -1690,7 +1711,11 @@
                 : "keyword hunt";
 
             IocItem? item = store.Add("tool", clean, source, $"{tool.Kind} ({procs})");
-            if (item is not null) { item.Flagged = tool.Noisy; }
+            if (item is not null && tool.Noisy)
+            {
+                item.Flagged = true;
+                item.FlagNote = "Legitimate software, present on most hosts";
+            }
         }
         else if (stixType == "tool")
         {

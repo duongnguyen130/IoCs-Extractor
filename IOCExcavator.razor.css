@@ -574,7 +574,6 @@
     border: 1px solid var(--ix-line);
     border-radius: var(--ix-radius);
     margin-bottom: 10px;
-    overflow: hidden;
 }
 
 .ioc-excavator .ix-cat-head {
@@ -591,14 +590,28 @@
 
     /* Inset shadow, not a border: it sits inside the rounded corner. */
     box-shadow: inset 3px 0 0 var(--ix-accent, var(--ix-line));
+
+    /* The card no longer clips, so the header rounds its own corners. */
+    border-radius: calc(var(--ix-radius) - 1px) calc(var(--ix-radius) - 1px) 0 0;
+}
+
+/* Minimised: the body is gone from the DOM, so the header is the whole card. */
+.ioc-excavator .ix-cat-head:last-child {
+    border-bottom: 0;
+    border-radius: calc(var(--ix-radius) - 1px);
 }
 
 /* The header doubles as the minimise control. Only the title area is the
-   button, so the copy buttons beside it keep their own click. */
+   button, so the copy buttons beside it keep their own click.
+
+   justify-content is stated outright: a button is centred by the browser's
+   own stylesheet and by most component libraries, and this one stretches to
+   fill the header, so without it the title floats to the middle. */
 
 .ioc-excavator .ix-cat-toggle {
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     flex-wrap: wrap;
     gap: 10px;
     flex: 1 1 auto;
@@ -695,6 +708,7 @@
 }
 
 .ioc-excavator .ix-item {
+    position: relative;
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -763,6 +777,39 @@
     color: var(--ix-surface);
 }
 
+/* Why a value is red. Hidden until the row is hovered or focused, so the
+   reason is one gesture away without putting it on every line. */
+
+.ioc-excavator .ix-tip {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 2px);
+    z-index: 20;
+    max-width: 44ch;
+    padding: 7px 11px;
+    border-radius: var(--ix-radius-sm);
+    background: var(--ix-text);
+    color: var(--ix-surface);
+    font-family: var(--ix-sans);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.45;
+    letter-spacing: 0;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, .22);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-2px);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+}
+
+.ioc-excavator .ix-item:hover .ix-tip,
+.ioc-excavator .ix-item:focus-within .ix-tip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
 .ioc-excavator .ix-value.ix-flagged {
     background: var(--ix-red);
     color: #FFF;
@@ -794,6 +841,8 @@
     width: max-content;
     display: flex;
     align-items: center;
+    justify-content: flex-start;
+    text-align: left;
     gap: 8px;
 }
 
